@@ -1,0 +1,911 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>J PHARM Sales Dashboard</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/react@17/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@17/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/babel-standalone@6/babel.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;800&display=swap" rel="stylesheet">
+    
+    <style>
+        body { font-family: 'Inter', sans-serif; background-color: #f8fafc; overflow-x: hidden; }
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+        
+        @keyframes marquee { 
+            0% { transform: translateX(100%); } 
+            100% { transform: translateX(-100%); } 
+        }
+        .animate-marquee { display: inline-block; animation: marquee 20s linear infinite; }
+        .chart-bar { transition: width 1s cubic-bezier(0.4, 0, 0.2, 1); }
+    </style>
+</head>
+<body class="h-screen w-screen overflow-hidden text-gray-800">
+    <div id="root" class="h-full w-full"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useMemo, useRef } = React;
+
+        const supabaseUrl = 'https://gyqaartzrlsqvbvvyhgb.supabase.co';
+        const supabaseKey = 'sb_publishable_MYC70x3Kmmyn3hU8kGgTDw_-uCsYIuc';
+        const supabase = window.supabase ? window.supabase.createClient(supabaseUrl, supabaseKey) : null;
+
+        const getDefaultDate = () => {
+            const today = new Date();
+            let year = today.getFullYear();
+            let month = today.getMonth();
+            if (month === 0) { year -= 1; month = 12; }
+            return { year, month };
+        };
+
+        const formatCurr = (num) => new Intl.NumberFormat('ko-KR').format(Math.ceil(Number(num))) + '원';
+        
+        // 날짜 포맷팅 함수 (YYYY.MM.DD(요일))
+        const formatDateWithDay = (date) => {
+            const days = ['일', '월', '화', '수', '목', '금', '토'];
+            const y = date.getFullYear();
+            const m = String(date.getMonth() + 1).padStart(2, '0');
+            const d = String(date.getDate()).padStart(2, '0');
+            const day = days[date.getDay()];
+            return `${y}.${m}.${d}(${day})`;
+        };
+
+        const App = () => {
+            const [view, setView] = useState('main'); 
+            const [salesData, setSalesData] = useState([
+                { id: 1, year: 2026, month: 6, hospitalName: '서울대병원', amount: 15000000 },
+                { id: 2, year: 2026, month: 6, hospitalName: '아산병원', amount: 12500000 },
+                { id: 3, year: 2026, month: 6, hospitalName: '세브란스', amount: 9800000 },
+                { id: 4, year: 2026, month: 6, hospitalName: '삼성의료원', amount: 8500000 },
+                { id: 5, year: 2026, month: 6, hospitalName: '성모병원', amount: 7200000 }
+            ]);
+            
+            const [settings, setSettings] = useState({ tickerOn: true, quoteOn: true, adminPin: '6969', logoBase64: '' });
+            const [currentDate, setCurrentDate] = useState(getDefaultDate());
+            const [toast, setToast] = useState(null);
+            const [loginPin, setLoginPin] = useState("");
+            const [isConnected, setIsConnected] = useState(navigator.onLine);
+            const [isRecovering, setIsRecovering] = useState(false);
+            const [newAdminPin, setNewAdminPin] = useState('');
+            
+            // 관리자 모드 상태
+            const [manualHosp, setManualHosp] = useState('');
+            const [manualAmt, setManualAmt] = useState('');
+            const [adminPage, setAdminPage] = useState(1);
+            const [editingId, setEditingId] = useState(null);
+            const [editHosp, setEditHosp] = useState('');
+            const [editAmt, setEditAmt] = useState('');
+            const [adminDate, setAdminDate] = useState(getDefaultDate());
+            
+            // 메인 화면 상태
+            const [showTaxModal, setShowTaxModal] = useState(false);
+            const [chartSort, setChartSort] = useState('current'); 
+            const [chartRendered, setChartRendered] = useState(false);
+
+            // 원장님 프로필 관리 상태
+            const [hospitalMaster, setHospitalMaster] = useState(['서울대병원', '아산병원', '세브란스', '삼성의료원', '성모병원']);
+            const [doctorProfiles, setDoctorProfiles] = useState([
+                { id: 1, hospitalName: '서울대병원', doctorName: '김의사', birthDate: '1975-08-25', isLunar: false, likes: '골프, 와인' },
+                { id: 2, hospitalName: '아산병원', doctorName: '이원장', birthDate: '1982-08-28', isLunar: true, likes: '테니스, 독서' }
+            ]);
+            const [newDoc, setNewDoc] = useState({ hospitalName: '', doctorName: '', birthDate: '', isLunar: false, likes: '' });
+            const [docPage, setDocPage] = useState(1);
+            const [editDocId, setEditDocId] = useState(null);
+            const [editDocData, setEditDocData] = useState({ doctorName: '', birthDate: '', isLunar: false, likes: '' });
+            
+            const [aiGiftMessage, setAiGiftMessage] = useState({});
+            const [isAiLoading, setIsAiLoading] = useState(false);
+            const [bdayPage, setBdayPage] = useState(1);
+            const [taxCostOption, setTaxCostOption] = useState(0); 
+            
+            const [tickerData, setTickerData] = useState({ 
+                gold: { val: 103450, diff: 0.2 }, 
+                usd: { val: 1380.5, diff: -0.1 }, 
+                kospi: { val: 2750.32, diff: 1.2 }, 
+                nasdaq: { val: 16500.41, diff: 0.8 }, 
+                btc: { val: 85400000, diff: -1.5 } 
+            });
+            const [bookModal, setBookModal] = useState(null);
+            const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
+
+            useEffect(() => {
+                const handleResize = () => setIsMobile(window.innerWidth < 768);
+                window.addEventListener('resize', handleResize);
+
+                const fetchRealtimeData = async () => {
+                    if (!supabase) return;
+                    try {
+                        const { data, error } = await supabase.from('sales_data').select('*');
+                        if (!error && data) {
+                            setSalesData(data);
+                        }
+                    } catch(e) {
+                        // fallback to local data if DB not configured yet
+                    }
+                };
+                
+                fetchRealtimeData();
+
+                const tickerInterval = setInterval(() => {
+                    setTickerData(prev => ({
+                        gold: { val: Math.floor(prev.gold.val * (1 + (Math.random() - 0.5) * 0.002)), diff: Number((prev.gold.diff + (Math.random() - 0.5) * 0.2).toFixed(2)) },
+                        usd: { val: Number((prev.usd.val * (1 + (Math.random() - 0.5) * 0.001)).toFixed(1)), diff: Number((prev.usd.diff + (Math.random() - 0.5) * 0.1).toFixed(2)) },
+                        kospi: { val: Number((prev.kospi.val * (1 + (Math.random() - 0.5) * 0.001)).toFixed(2)), diff: Number((prev.kospi.diff + (Math.random() - 0.5) * 0.2).toFixed(2)) },
+                        nasdaq: { val: Number((prev.nasdaq.val * (1 + (Math.random() - 0.5) * 0.001)).toFixed(2)), diff: Number((prev.nasdaq.diff + (Math.random() - 0.5) * 0.2).toFixed(2)) },
+                        btc: { val: Math.floor(prev.btc.val * (1 + (Math.random() - 0.5) * 0.003)), diff: Number((prev.btc.diff + (Math.random() - 0.5) * 0.5).toFixed(2)) }
+                    }));
+                }, 4000);
+
+                const syncInterval = setInterval(() => {
+                    if (navigator.onLine) fetchRealtimeData();
+                }, 5000);
+
+                const handleOnline = () => { setIsConnected(true); setIsRecovering(false); showToast('실시간 네트워크 연결 복구됨', 'success'); fetchRealtimeData(); };
+                const handleOffline = () => { setIsConnected(false); showToast('네트워크 끊김. 자동 복구 대기 중...', 'error'); };
+                
+                window.addEventListener('online', handleOnline);
+                window.addEventListener('offline', handleOffline);
+                
+                setTimeout(() => setChartRendered(true), 300);
+
+                return () => {
+                    clearInterval(tickerInterval);
+                    clearInterval(syncInterval);
+                    window.removeEventListener('resize', handleResize);
+                    window.removeEventListener('online', handleOnline);
+                    window.removeEventListener('offline', handleOffline);
+                };
+            }, []);
+
+            const showToast = (msg, type='info') => {
+                setToast({msg, type});
+                setTimeout(() => setToast(null), 3000);
+            };
+
+            const hospitalStats = useMemo(() => {
+                const stats = {};
+                salesData.forEach(d => {
+                    if (d.year === currentDate.year && d.month <= currentDate.month) {
+                        if (!stats[d.hospitalName]) {
+                            stats[d.hospitalName] = { id: d.id, hospitalName: d.hospitalName, current: 0, accumulated: 0 };
+                        }
+                        if (d.month === currentDate.month) {
+                            stats[d.hospitalName].current += Number(d.amount);
+                        }
+                        stats[d.hospitalName].accumulated += Number(d.amount);
+                    }
+                });
+                return Object.values(stats);
+            }, [salesData, currentDate]);
+
+            const displayedHospitals = useMemo(() => {
+                return [...hospitalStats]
+                    .filter(h => h[chartSort] > 0)
+                    .sort((a, b) => b[chartSort] - a[chartSort]);
+            }, [hospitalStats, chartSort]);
+
+            const maxAmount = displayedHospitals.length > 0 ? Math.max(...displayedHospitals.map(d => d[chartSort])) : 1;
+            const monthlyTotal = useMemo(() => hospitalStats.reduce((sum, curr) => sum + curr.current, 0), [hospitalStats]);
+
+            const taxEstimate = useMemo(() => {
+                const cost = Number(taxCostOption) || 0; 
+                
+                // 부가세 해당기간 매출 산출 (1기: 1~6월, 2기: 7~12월)
+                const isFirstHalf = currentDate.month <= 6;
+                const vatSales = salesData
+                    .filter(d => d.year === currentDate.year && (isFirstHalf ? d.month <= 6 : d.month > 6))
+                    .reduce((sum, curr) => sum + Number(curr.amount), 0);
+                    
+                // 종소세 해당기간 매출 산출 (해당 연도 전체)
+                const incSales = salesData
+                    .filter(d => d.year === currentDate.year)
+                    .reduce((sum, curr) => sum + Number(curr.amount), 0);
+                
+                // 부가세 계산: (해당기간 누적매출 - 입력비용) * 10%
+                const vat = Math.max(0, Math.ceil(vatSales * 0.1) - Math.ceil(cost * 0.1)); 
+                
+                // 종소세 계산: 과세표준 = 해당 연도 누적매출 - 입력비용
+                const netRevenue = Math.max(0, incSales - cost);
+                let incTax = 0;
+                
+                if (netRevenue <= 14000000) { incTax = netRevenue * 0.06; }
+                else if (netRevenue <= 50000000) { incTax = 840000 + (netRevenue - 14000000) * 0.15; }
+                else if (netRevenue <= 88000000) { incTax = 6240000 + (netRevenue - 50000000) * 0.24; }
+                else if (netRevenue <= 150000000) { incTax = 15360000 + (netRevenue - 88000000) * 0.35; }
+                else { incTax = 37060000 + (netRevenue - 150000000) * 0.38; }
+                
+                const localTax = Math.ceil(incTax * 0.1); 
+                
+                const today = new Date();
+                const y = today.getFullYear();
+                
+                let vatD1 = new Date(y, 0, 25);
+                let vatD2 = new Date(y, 6, 25);
+                if(today > vatD2) vatD1 = new Date(y+1, 0, 25);
+                const nextVatDate = (today <= vatD1 || today > vatD2) ? vatD1 : vatD2;
+                const vatPeriod = nextVatDate.getMonth() === 0 ? "2기(7~12월) 과세기간" : "1기(1~6월) 과세기간";
+                
+                let incDate = new Date(y, 4, 31);
+                if(today > incDate) incDate = new Date(y+1, 4, 31);
+
+                const diffVat = Math.ceil((nextVatDate - today)/(1000*60*60*24));
+                const diffInc = Math.ceil((incDate - today)/(1000*60*60*24));
+                
+                const totalTax = vat + incTax + localTax;
+                
+                const msgs = totalTax > 15000000 ? [
+                    "세금 폭탄 경보! 💣 매출이 엄청나시네요. 미리 절세 플랜을 준비하세요!",
+                    "국세청 VVIP 등극! 🎉 많이 버신 만큼 세금도 듬뿍 납부할 준비 되셨나요?",
+                    "워렌 버핏도 놀랄 납세액! 💸 국가 발전에 이바지하는 당신, 파이팅!"
+                ] : [
+                    "성실 납세의 아이콘! 이번 달도 고생 많으셨습니다. 😊",
+                    "차곡차곡 쌓이는 매출만큼 세금도 꼬박꼬박! 훌륭합니다. 👍",
+                    "안정적인 운영! 국세청이 사랑하는 성실 사업자입니다."
+                ];
+                const comment = msgs[Math.floor(Math.random() * msgs.length)];
+
+                const nextVatDateStr = formatDateWithDay(nextVatDate);
+                const incDateStr = formatDateWithDay(incDate);
+
+                return { 
+                    vat, incTax, localTax, totalTax, comment,
+                    nextVatDate, vatPeriod, diffVat, nextVatDateStr,
+                    incDate, diffInc, incDateStr,
+                    vatSales, incSales
+                };
+            }, [salesData, currentDate, taxCostOption]);
+
+            const upcomingBirthdays = useMemo(() => {
+                const today = new Date();
+                const sorted = doctorProfiles.filter(p => p.birthDate).map(p => {
+                    const parts = p.birthDate.split('-');
+                    if(parts.length !== 3) return { ...p, dday: 999 };
+                    const m = Number(parts[1]);
+                    const d = Number(parts[2]);
+                    let bday = new Date(today.getFullYear(), m - 1, d);
+                    if (bday < new Date(today.getFullYear(), today.getMonth(), today.getDate())) {
+                        bday.setFullYear(today.getFullYear() + 1);
+                    }
+                    return { ...p, dday: Math.ceil((bday - today) / (1000 * 60 * 60 * 24)) };
+                }).sort((a,b) => a.dday - b.dday);
+                return sorted;
+            }, [doctorProfiles]);
+
+            // 매일 00시 업데이트: 가족(박주아, 김경옥)과 친구(박현재)를 위한 영업 응원 멘트
+            const dailyQuote = useMemo(() => {
+                const quotes = [
+                    "현재야, 오늘도 주아와 경옥 제수씨를 위해 달리는 너의 열정을 응원한다! 최고의 영업맨 박현재 화이팅!",
+                    "영업은 거절에서부터 시작된다. 주아 아빠의 저력을 보여주자, 박현재!",
+                    "경옥씨와 주아의 환한 미소를 떠올리며 오늘 하루도 힘차게 시작해! 넌 할 수 있어.",
+                    "성공한 세일즈맨 박현재! 오늘도 고객의 마음을 완벽하게 훔치는 멋진 하루가 되길!",
+                    "지칠 땐 사랑하는 아내 경옥씨와 눈에 넣어도 아프지 않을 딸 주아를 생각해. 오늘 흘린 땀방울이 가족의 든든한 행복이 될 거야.",
+                    "영업의 달인 박현재, 오늘의 목표도 거뜬히 달성할 거라 믿어 의심치 않아. 자신감을 가져!",
+                    "가족이라는 든든한 둥지가 있기에 박현재는 오늘도 높이 날아오른다. 멋진 아빠, 든든한 남편 화이팅!"
+                ];
+                const now = new Date();
+                const daysSinceEpoch = Math.floor((now.getTime() + (9 * 60 * 60 * 1000)) / (1000 * 60 * 60 * 24));
+                return quotes[daysSinceEpoch % quotes.length];
+            }, []);
+
+            const recommendedBooks = [
+                { title: '세일즈의 심리학', author: '브라이언 트레이시', summary: '고객의 마음을 여는 강력한 세일즈 기법과 심리학적 접근법을 다룹니다. 매출 상승의 바이블!', price: 16000, discount: 14400, link: '교보문고, YES24 구매 가능' },
+                { title: '기브 앤 테이크', author: '애덤 그랜트', summary: '타인을 돕는 이타적인 사람이 결국 성공 사다리의 맨 꼭대기에 오른다는 것을 증명하는 베스트셀러.', price: 18000, discount: 16200, link: '교보문고, 알라딘 구매 가능' },
+                { title: '설득의 심리학', author: '로버트 치알디니', summary: '사람의 마음을 사로잡고 설득하는 6가지 불변의 법칙을 소개합니다.', price: 22000, discount: 19800, link: '인터넷 서점 최저가 구매 가능' },
+                { title: '데일 카네기 인간관계론', author: '데일 카네기', summary: '전 세계 6천만 부 판매! 사람의 마음을 얻고 원만한 관계를 맺는 최고의 고전.', price: 11500, discount: 10350, link: 'YES24, 밀리의 서재 등' },
+                { title: '부를 끌어당기는 생각', author: '나폴레온 힐', summary: '성공한 사람들의 13가지 원칙을 통해 부와 성공을 성취하는 마인드셋을 배웁니다.', price: 15000, discount: 13500, link: '쿠팡 로켓배송 가능' }
+            ];
+
+            const generateAiRecommendation = (profile) => {
+                setIsAiLoading(true);
+                setTimeout(() => {
+                    const rec = profile.likes ? profile.likes.split(',')[0] : '건강';
+                    setAiGiftMessage(prev => ({
+                        ...prev, 
+                        [profile.id]: `🎁 [AI 추천] ${rec}에 관심있는 원장님께는 10만원대 프리미엄 ${rec} 용품이나 관련 매거진을 추천합니다. "원장님 생신 축하드립니다!" 멘트와 함께 전달해보세요.`
+                    }));
+                    setIsAiLoading(false);
+                }, 1000);
+            };
+
+            const handleManualAmtChange = (e) => {
+                const rawValue = e.target.value.replace(/[^0-9]/g, "");
+                if(!rawValue) { setManualAmt(''); return; }
+                setManualAmt(new Intl.NumberFormat('ko-KR').format(Number(rawValue)));
+            };
+
+            const handleManualSubmit = async () => {
+                const numericAmt = Math.ceil(Number(manualAmt.replace(/,/g, '')));
+                if (!manualHosp || !numericAmt) return showToast('병원명과 금액을 입력해주세요.', 'error');
+                
+                const newRecord = { id: Date.now(), year: adminDate.year, month: adminDate.month, hospitalName: manualHosp, amount: numericAmt };
+                
+                try {
+                    if (supabase) await supabase.from('sales_data').insert([{...newRecord, id: undefined}]);
+                } catch(e) {}
+                
+                setSalesData(prev => [newRecord, ...prev]);
+                showToast(`${manualHosp} 매출 등록 완료`, 'success');
+                if (!hospitalMaster.includes(manualHosp)) setHospitalMaster(prev => [...prev, manualHosp].sort());
+                setManualHosp(''); setManualAmt('');
+            };
+
+            const exportCSV = (type, targetHosp = '') => {
+                let dataToExport = [];
+                let filename = 'sales_data.csv';
+                
+                if(type === 'all') {
+                    dataToExport = salesData.filter(d => d.year === adminDate.year && d.month === adminDate.month);
+                    filename = `J_PHARM_매출_${adminDate.year}년_${adminDate.month}월.csv`;
+                } else if(type === 'hospital') {
+                    dataToExport = salesData.filter(d => d.hospitalName === targetHosp);
+                    filename = `J_PHARM_매출_${targetHosp}.csv`;
+                } else if(type === 'yearly') {
+                    dataToExport = salesData.filter(d => d.year === adminDate.year);
+                    filename = `J_PHARM_매출_${adminDate.year}년_전체.csv`;
+                }
+                
+                if(dataToExport.length === 0) return showToast('다운로드할 데이터가 없습니다.', 'error');
+                
+                const csvRows = ['\uFEFF연도,월,병원명,매출금액'];
+                dataToExport.forEach(row => csvRows.push(`${row.year},${row.month},${row.hospitalName},${row.amount}`));
+                
+                const blob = new Blob([csvRows.join('\n')], { type: 'text/csv;charset=utf-8;' });
+                const link = document.createElement('a');
+                link.href = URL.createObjectURL(blob);
+                link.setAttribute('download', filename);
+                document.body.appendChild(link); link.click(); document.body.removeChild(link);
+                showToast('엑셀(CSV) 다운로드 완료', 'success');
+            };
+
+            const renderTickerVal = (item) => {
+                const colorClass = item.diff > 0 ? 'text-rose-500' : (item.diff < 0 ? 'text-blue-500' : 'text-gray-500');
+                const icon = item.diff > 0 ? '▲' : (item.diff < 0 ? '▼' : '-');
+                return <span className={`ml-1 ${colorClass}`}>{icon}{Math.abs(item.diff)}%</span>;
+            };
+
+            if (view === 'login') {
+                return (
+                    <div className="h-full flex items-center justify-center bg-gray-900 text-white p-4">
+                        <div className="bg-gray-800 p-8 rounded-2xl shadow-2xl w-full max-w-sm text-center">
+                            <h2 className="text-2xl font-bold mb-6 text-emerald-400"><i className="fas fa-lock"></i> 관리자 인증</h2>
+                            <input type="password" value={loginPin} onChange={e=>setLoginPin(e.target.value)} onKeyDown={e=>{if(e.key==='Enter' && loginPin===settings.adminPin) { setView('admin'); setLoginPin(''); } else if(e.key==='Enter') { showToast('비번 오류','error'); setLoginPin(''); } }} placeholder="비밀번호 입력" className="w-full p-3 rounded bg-gray-700 text-center text-xl tracking-widest outline-none focus:ring-2 focus:ring-emerald-500 mb-4" />
+                            <div className="flex gap-2">
+                                <button onClick={()=>{if(loginPin===settings.adminPin) { setView('admin'); setLoginPin(''); } else { showToast('비번 오류','error'); setLoginPin(''); } }} className="flex-1 bg-emerald-600 hover:bg-emerald-500 py-3 rounded font-bold transition">접속</button>
+                                <button onClick={()=>{setView('main'); setLoginPin('');}} className="flex-1 bg-gray-600 hover:bg-gray-500 py-3 rounded font-bold transition">취소</button>
+                            </div>
+                        </div>
+                    </div>
+                );
+            }
+
+            return (
+                <div className="h-full flex flex-col bg-[#f8fafc]">
+                    {/* Header */}
+                    <div className="bg-white border-b border-gray-200 px-4 py-2 flex items-center justify-between shrink-0 shadow-sm z-10">
+                        <div className="flex items-center gap-3">
+                            <h1 className="text-xl font-black text-emerald-800 tracking-tighter">J PHARM.</h1>
+                            <div className="flex items-center gap-1 bg-gray-50 px-2 py-1 rounded-full border border-gray-200">
+                                <div className={`w-2 h-2 rounded-full ${isConnected ? 'bg-emerald-500' : 'bg-rose-500'} ${isRecovering ? 'animate-pulse' : ''}`}></div>
+                                <span className={`text-[10px] font-bold ${isConnected ? 'text-emerald-700' : 'text-rose-600'}`}>SYNC</span>
+                            </div>
+                        </div>
+
+                        {settings.tickerOn && (
+                            <div className="flex-1 overflow-hidden mx-2 md:mx-4 text-[10px] md:text-[11px] font-bold">
+                                <div className="animate-marquee whitespace-nowrap space-x-6 text-gray-600">
+                                    <span><i className="fas fa-coins text-yellow-500"></i> 금 {formatCurr(tickerData.gold.val)}{renderTickerVal(tickerData.gold)}</span>
+                                    <span><i className="fas fa-dollar-sign text-emerald-500"></i> 달러 {tickerData.usd.val}{renderTickerVal(tickerData.usd)}</span>
+                                    <span>KOSPI {tickerData.kospi.val}{renderTickerVal(tickerData.kospi)}</span>
+                                    <span>NASDAQ {tickerData.nasdaq.val}{renderTickerVal(tickerData.nasdaq)}</span>
+                                    <span><i className="fab fa-bitcoin text-orange-500"></i> BTC {formatCurr(tickerData.btc.val)}{renderTickerVal(tickerData.btc)}</span>
+                                </div>
+                            </div>
+                        )}
+
+                        <button onClick={() => {setView(view === 'main' ? 'login' : 'main'); setLoginPin('');}} className="flex items-center gap-1.5 text-gray-600 hover:text-emerald-700 transition px-3 py-1.5 border border-gray-200 bg-white hover:bg-emerald-50 rounded-lg shadow-sm shrink-0">
+                            <i className={`fas ${view === 'main' ? 'fa-cog' : 'fa-home'} text-sm`}></i>
+                            <span className="text-[11px] font-bold hidden md:inline">{view === 'main' ? '관리자 모드' : '메인 화면'}</span>
+                        </button>
+                    </div>
+
+                    {}
+                    {view === 'main' && (
+                        <div className="flex-1 flex flex-col md:flex-row p-4 gap-4 overflow-y-auto md:overflow-hidden">
+                            <div className="flex-1 flex flex-col gap-4 shrink-0 overflow-visible md:overflow-hidden">
+                                <div className="flex gap-4 shrink-0">
+                                    <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 flex-1 flex flex-col justify-center relative overflow-hidden">
+                                        <div className="absolute top-0 right-0 w-24 h-24 bg-emerald-50 rounded-full blur-2xl -mr-10 -mt-10"></div>
+                                        <div className="flex items-center gap-2 mb-1">
+                                            <select value={currentDate.year} onChange={e=>setCurrentDate({...currentDate, year: Number(e.target.value)})} className="font-bold text-gray-600 bg-transparent outline-none cursor-pointer">
+                                                {[2024, 2025, 2026, 2027].map(y => <option key={y} value={y}>{y}년</option>)}
+                                            </select>
+                                            <select value={currentDate.month} onChange={e=>setCurrentDate({...currentDate, month: Number(e.target.value)})} className="font-bold text-emerald-600 bg-transparent outline-none text-lg cursor-pointer">
+                                                {[1,2,3,4,5,6,7,8,9,10,11,12].map(m => <option key={m} value={m}>{m}월</option>)}
+                                            </select>
+                                        </div>
+                                        <p className="text-gray-500 text-xs mb-1">당월 총 매출액</p>
+                                        <h2 className="text-3xl md:text-4xl font-black text-gray-800 tracking-tight">{formatCurr(monthlyTotal)}</h2>
+                                    </div>
+                                    
+                                    {/* TAX CHECK 직관성/디자인 개선 - 날짜 표기 추가 */}
+                                    <div onClick={() => { setTaxCostOption(0); setShowTaxModal(true); }} className="bg-gray-800 hover:bg-gray-900 transition cursor-pointer text-white rounded-2xl p-4 shadow-sm flex flex-col justify-between shrink-0 w-44 md:w-56 transform hover:scale-105">
+                                        <div className="flex items-center gap-2 border-b border-gray-600 pb-2 mb-2">
+                                            <i className="fas fa-calculator text-xl text-emerald-400"></i>
+                                            <span className="font-bold text-sm tracking-widest text-gray-200">TAX CHECK</span>
+                                        </div>
+                                        <div className="flex flex-col gap-1.5 w-full text-[11px] font-bold">
+                                            <div className="flex justify-between items-center bg-gray-700/50 px-2 py-1.5 rounded">
+                                                <span className="text-gray-300 shrink-0">부가세</span>
+                                                <div className="flex items-center gap-1.5">
+                                                    <span className="text-[9px] text-gray-400 font-normal">{taxEstimate.nextVatDateStr}</span>
+                                                    <span className="text-emerald-400 bg-emerald-900/50 px-1.5 py-0.5 rounded-full text-[10px]">D-{taxEstimate.diffVat}</span>
+                                                </div>
+                                            </div>
+                                            <div className="flex justify-between items-center bg-gray-700/50 px-2 py-1.5 rounded">
+                                                <span className="text-gray-300 shrink-0">종소세</span>
+                                                <div className="flex items-center gap-1.5">
+                                                    <span className="text-[9px] text-gray-400 font-normal">{taxEstimate.incDateStr}</span>
+                                                    <span className="text-amber-400 bg-amber-900/50 px-1.5 py-0.5 rounded-full text-[10px]">D-{taxEstimate.diffInc}</span>
+                                                </div>
+                                            </div>
+                                            <div className="flex justify-between items-center bg-gray-700/50 px-2 py-1.5 rounded">
+                                                <span className="text-gray-300 shrink-0">지방세</span>
+                                                <div className="flex items-center gap-1.5">
+                                                    <span className="text-[9px] text-gray-400 font-normal">{taxEstimate.incDateStr}</span>
+                                                    <span className="text-blue-400 bg-blue-900/50 px-1.5 py-0.5 rounded-full text-[10px]">D-{taxEstimate.diffInc}</span>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <div className="mt-2 text-center pt-1 border-t border-gray-600/50">
+                                            <span className="text-[10px] text-gray-400">클릭하여 예상 세금 계산 👆</span>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-5 flex-1 flex flex-col overflow-hidden min-h-[300px] md:min-h-0">
+                                    <div className="flex justify-between items-center mb-4 shrink-0 border-b border-gray-100 pb-3">
+                                        <h3 className="font-bold text-gray-800 text-base"><i className="fas fa-chart-bar text-emerald-500 mr-2"></i>병원별 매출 랭킹</h3>
+                                        <div className="flex bg-gray-100 rounded-full p-1">
+                                            <button onClick={() => {setChartSort('current'); setChartRendered(false); setTimeout(()=>setChartRendered(true), 100);}} className={`text-xs font-bold px-4 py-1.5 rounded-full transition ${chartSort === 'current' ? 'bg-emerald-500 text-white shadow' : 'text-gray-500 hover:text-gray-700'}`}>당월 매출</button>
+                                            <button onClick={() => {setChartSort('accumulated'); setChartRendered(false); setTimeout(()=>setChartRendered(true), 100);}} className={`text-xs font-bold px-4 py-1.5 rounded-full transition ${chartSort === 'accumulated' ? 'bg-blue-500 text-white shadow' : 'text-gray-500 hover:text-gray-700'}`}>누적 매출</button>
+                                        </div>
+                                    </div>
+                                    <div className="flex-1 overflow-y-auto no-scrollbar pr-2 space-y-4 pt-2">
+                                        {displayedHospitals.length === 0 ? (
+                                            <div className="h-full flex items-center justify-center text-sm text-gray-400">데이터가 없습니다.</div>
+                                        ) : (
+                                            displayedHospitals.map((item, idx) => {
+                                                const percent = (item[chartSort] / maxAmount) * 100;
+                                                const barColor = chartSort === 'current' ? 'bg-emerald-500' : 'bg-blue-500';
+                                                return (
+                                                    <div key={item.id} className="relative group">
+                                                        <div className="flex justify-between items-end mb-1">
+                                                            <span className="text-gray-700 font-bold text-base truncate mr-2">{idx + 1}. {item.hospitalName}</span>
+                                                            <span className="text-gray-900 font-black text-lg shrink-0">{formatCurr(item[chartSort])}</span>
+                                                        </div>
+                                                        <div className="w-full bg-gray-100 rounded-full h-3.5 overflow-hidden shadow-inner">
+                                                            <div className={`h-full rounded-full chart-bar ${barColor} opacity-90 group-hover:opacity-100 transition-opacity`} style={{ width: chartRendered ? `${percent}%` : '0%' }}></div>
+                                                        </div>
+                                                    </div>
+                                                );
+                                            })
+                                        )}
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div className="w-full md:w-80 flex flex-col gap-4 shrink-0 overflow-visible md:overflow-hidden pb-10 md:pb-0">
+                                {upcomingBirthdays.length > 0 && (
+                                    <div className="bg-gradient-to-br from-indigo-600 to-purple-800 text-white rounded-2xl shadow-sm p-4 flex flex-col shrink-0 relative overflow-hidden min-h-[220px]">
+                                        <i className="fas fa-gift absolute opacity-10 text-6xl -bottom-4 -right-4"></i>
+                                        <div className="flex justify-between items-center border-b border-white/20 pb-2 mb-3 relative z-10">
+                                            <h3 className="font-bold text-sm flex items-center"><i className="fas fa-birthday-cake text-pink-300 mr-2"></i>원장님 생일 D-Day</h3>
+                                            <div className="flex gap-1">
+                                                <button onClick={()=>setBdayPage(Math.max(1, bdayPage-1))} className="px-1.5 bg-white/10 hover:bg-white/20 rounded text-[10px]"><i className="fas fa-chevron-left"></i></button>
+                                                <span className="text-[10px] font-bold px-1">{bdayPage} / {Math.ceil(upcomingBirthdays.length/5)}</span>
+                                                <button onClick={()=>setBdayPage(Math.min(Math.ceil(upcomingBirthdays.length/5), bdayPage+1))} className="px-1.5 bg-white/10 hover:bg-white/20 rounded text-[10px]"><i className="fas fa-chevron-right"></i></button>
+                                            </div>
+                                        </div>
+                                        
+                                        <div className="space-y-2 relative z-10 flex-1 overflow-y-auto no-scrollbar pr-1">
+                                            {upcomingBirthdays.slice((bdayPage-1)*5, bdayPage*5).map(p => (
+                                                <div key={p.id} className="bg-white/10 p-2.5 rounded-xl border border-white/20">
+                                                    <div className="flex justify-between items-center mb-1.5">
+                                                        <span className="font-bold text-sm truncate">{p.hospitalName} {p.doctorName} <span className="text-[10px] text-indigo-200">({p.birthDate.substring(5)}{p.isLunar ? '음' : ''})</span></span>
+                                                        <span className="text-xs font-black bg-pink-500 px-2 py-0.5 rounded-full shadow-sm shrink-0">D-{p.dday === 0 ? 'DAY' : p.dday}</span>
+                                                    </div>
+                                                    {aiGiftMessage[p.id] ? (
+                                                        <p className="text-[11px] leading-relaxed text-indigo-100 bg-black/30 p-2 rounded-lg mt-1 border border-indigo-500/50">{aiGiftMessage[p.id]}</p>
+                                                    ) : (
+                                                        <button onClick={() => generateAiRecommendation(p)} disabled={isAiLoading} className="w-full text-[10px] bg-white/20 hover:bg-white/30 transition py-1 rounded font-bold flex items-center justify-center gap-1">
+                                                            {isAiLoading ? <i className="fas fa-spinner fa-spin"></i> : <i className="fas fa-magic text-yellow-300"></i>} AI 맞춤 선물/멘트 추천
+                                                        </button>
+                                                    )}
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                )}
+                                
+                                {/* 친구 영업 응원 메시지 (PC/모바일 반응형 최적화) */}
+                                {settings.quoteOn && (
+                                    <div className="bg-gradient-to-br from-emerald-600 to-teal-800 text-white rounded-2xl shadow-sm p-4 shrink-0 relative overflow-hidden">
+                                        <i className="fas fa-quote-left absolute opacity-20 text-4xl -top-1 -left-1"></i>
+                                        <p className="text-[13px] leading-relaxed relative z-10 font-bold whitespace-pre-wrap break-keep pl-2">"{dailyQuote}"</p>
+                                    </div>
+                                )}
+                                
+                                <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 flex-1 flex flex-col overflow-hidden">
+                                    <h3 className="font-bold text-gray-800 mb-3 flex items-center gap-2 text-base border-b border-gray-100 pb-2"><i className="fas fa-book-open text-amber-500"></i> 금주의 추천 도서 Top 5</h3>
+                                    <ul className="flex-1 flex flex-col space-y-2 overflow-y-auto no-scrollbar">
+                                        {recommendedBooks.map((book, i) => (
+                                            <li key={i} onClick={() => setBookModal(book)} className="group flex gap-3 items-center p-2.5 border border-transparent hover:border-amber-100 bg-gray-50 hover:bg-amber-50 cursor-pointer transition rounded-xl relative overflow-hidden">
+                                                <div className="w-6 h-6 bg-amber-100 text-amber-600 rounded-full flex items-center justify-center font-black text-xs shrink-0 shadow-sm">{i+1}</div>
+                                                <div className="flex-1 min-w-0">
+                                                    <p className="font-bold text-gray-800 text-[13px] truncate group-hover:text-amber-700 transition">{book.title}</p>
+                                                    <p className="text-gray-400 text-[11px] mt-0.5 truncate">{book.author}</p>
+                                                </div>
+                                                <div className="opacity-0 group-hover:opacity-100 transition absolute right-2 bg-white px-2 py-1 rounded text-[10px] font-bold text-amber-600 shadow-sm border border-amber-100 whitespace-nowrap">클릭하여 보기 <i className="fas fa-search ml-1"></i></div>
+                                            </li>
+                                        ))}
+                                    </ul>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {}
+                    {view === 'admin' && (
+                        <div className="flex-1 overflow-y-auto no-scrollbar p-4 flex flex-col gap-4">
+                            {/* 저장 후 나가기 헤더 */}
+                            <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-2 border-b border-gray-200 pb-2">
+                                <h2 className="text-lg font-black text-emerald-800"><i className="fas fa-cog mr-2"></i> 관리자 모드</h2>
+                                <div className="flex gap-2 items-center">
+                                    <select value={adminDate.year} onChange={e=>setAdminDate({...adminDate, year: Number(e.target.value)})} className="text-xs font-bold border border-gray-200 rounded p-1.5 shadow-sm outline-none">
+                                        {[2024, 2025, 2026, 2027].map(y => <option key={y} value={y}>{y}년</option>)}
+                                    </select>
+                                    <select value={adminDate.month} onChange={e=>setAdminDate({...adminDate, month: Number(e.target.value)})} className="text-xs font-bold border border-emerald-200 bg-emerald-50 text-emerald-800 rounded p-1.5 shadow-sm outline-none">
+                                        {[1,2,3,4,5,6,7,8,9,10,11,12].map(m => <option key={m} value={m}>{m}월</option>)}
+                                    </select>
+                                    <button onClick={() => { showToast('설정이 최종 반영되었습니다.', 'success'); setView('main'); setLoginPin(''); }} className="ml-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold px-4 py-2 rounded shadow-sm flex items-center gap-1 transition">
+                                        <i className="fas fa-save"></i> 저장 후 나가기
+                                    </button>
+                                </div>
+                            </div>
+
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <div className="bg-white p-5 border border-gray-200 rounded-xl shadow-sm md:col-span-2">
+                                    <div className="flex justify-between mb-3"><h4 className="font-bold text-sm text-gray-700 flex items-center"><i className="fas fa-keyboard mr-2 text-emerald-500"></i> 매출 수동 입력 및 병원 관리</h4></div>
+                                    <div className="flex flex-col md:flex-row gap-3">
+                                        <div className="flex-1 flex flex-col gap-1">
+                                            <label className="text-[11px] font-bold text-gray-500">기존 병원 선택</label>
+                                            <div className="flex gap-1">
+                                                <select className="flex-1 border p-2.5 rounded-lg text-sm bg-gray-50 outline-none" value={manualHosp} onChange={e=>setManualHosp(e.target.value)}>
+                                                    <option value="">병원명 자동선택 (가나다순)</option>
+                                                    {[...hospitalMaster].sort().map(h => <option key={h} value={h}>{h}</option>)}
+                                                </select>
+                                                <button onClick={() => {
+                                                    if(!manualHosp) return;
+                                                    setHospitalMaster(prev => prev.filter(h => h !== manualHosp));
+                                                    setManualHosp(''); showToast('리스트에서 삭제됨', 'success');
+                                                }} className="px-3 bg-rose-50 text-rose-600 rounded-lg text-xs font-bold border border-rose-200 hover:bg-rose-100">삭제</button>
+                                            </div>
+                                        </div>
+                                        <div className="flex-1 flex flex-col gap-1">
+                                            <label className="text-[11px] font-bold text-gray-500">신규 병원 입력</label>
+                                            <input type="text" className="w-full border p-2.5 rounded-lg text-sm outline-none focus:border-emerald-500" placeholder="직접 입력" value={manualHosp} onChange={e=>setManualHosp(e.target.value)} />
+                                        </div>
+                                        <div className="flex-1 flex flex-col gap-1">
+                                            <label className="text-[11px] font-bold text-gray-500">{adminDate.month}월 당월 매출액</label>
+                                            <input type="text" className="w-full border p-2.5 rounded-lg text-sm font-bold outline-none focus:border-emerald-500" placeholder="금액 (숫자만)" value={manualAmt} onChange={handleManualAmtChange} onKeyDown={e=>{if(e.key === 'Enter') handleManualSubmit();}} />
+                                        </div>
+                                        <div className="flex items-end"><button onClick={handleManualSubmit} className="w-full md:w-28 bg-emerald-600 hover:bg-emerald-700 text-white p-2.5 rounded-lg text-sm font-bold transition h-[42px]"><i className="fas fa-check"></i> 등록</button></div>
+                                    </div>
+                                    
+                                    {manualHosp && (
+                                        <div className="mt-3 text-xs text-emerald-800 bg-emerald-50 p-2.5 rounded-lg border border-emerald-100 flex items-center font-bold">
+                                            <i className="fas fa-chart-line mr-2"></i> {adminDate.year}년 1월 ~ {adminDate.month}월 누적: 
+                                            <span className="bg-white px-2 py-0.5 rounded border border-emerald-200 ml-2">
+                                                {formatCurr(salesData.filter(d => d.year === adminDate.year && d.month <= adminDate.month && d.hospitalName === manualHosp).reduce((sum, d) => sum + Number(d.amount), 0))}
+                                            </span>
+                                        </div>
+                                    )}
+                                </div>
+                                
+                                <div className="bg-white p-5 border border-gray-200 rounded-xl shadow-sm md:col-span-2 flex flex-col md:flex-row gap-6">
+                                    <div className="flex-1 flex flex-col">
+                                        <h4 className="font-bold text-sm mb-3 text-gray-700 border-b pb-2"><i className="fas fa-user-md mr-2 text-indigo-500"></i> 원장님 프로필 관리 (생일 달력 연동)</h4>
+                                        
+                                        {/* 원장님 입력 폼 */}
+                                        <div className="flex flex-wrap gap-2 items-end mb-4">
+                                            <div className="flex-1 min-w-[130px]">
+                                                <label className="text-[10px] font-bold text-gray-500 mb-1 block">등록된 병원 선택</label>
+                                                <select className="w-full border p-2 rounded text-xs bg-gray-50 outline-none" value={newDoc.hospitalName} onChange={e=>setNewDoc({...newDoc, hospitalName: e.target.value})}>
+                                                    <option value="">병원명 선택</option>
+                                                    {[...hospitalMaster].sort().map(h => <option key={h} value={h}>{h}</option>)}
+                                                </select>
+                                            </div>
+                                            <div className="flex-1 min-w-[100px]">
+                                                <label className="text-[10px] font-bold text-gray-500 mb-1 block">원장명 입력</label>
+                                                <input type="text" placeholder="예: 홍길동" className="w-full border p-2 rounded text-xs bg-gray-50 outline-none" value={newDoc.doctorName} onChange={e=>setNewDoc({...newDoc, doctorName: e.target.value})}/>
+                                            </div>
+                                            <div className="flex-1 min-w-[180px]">
+                                                <label className="text-[10px] font-bold text-gray-500 mb-1 block">생년월일 (1940년~)</label>
+                                                <div className="flex gap-1">
+                                                    <input type="date" min="1940-01-01" className="w-full border p-2 rounded text-xs bg-gray-50 outline-none" value={newDoc.birthDate} onChange={e=>setNewDoc({...newDoc, birthDate: e.target.value})}/>
+                                                    <select className="border p-2 rounded text-xs bg-gray-50 outline-none" value={newDoc.isLunar} onChange={e=>setNewDoc({...newDoc, isLunar: e.target.value === 'true'})}>
+                                                        <option value="false">양력</option>
+                                                        <option value="true">음력</option>
+                                                    </select>
+                                                </div>
+                                            </div>
+                                            <div className="flex-1 min-w-[120px]">
+                                                <label className="text-[10px] font-bold text-gray-500 mb-1 block">관심사</label>
+                                                <input type="text" placeholder="예: 골프, 와인" className="w-full border p-2 rounded text-xs bg-gray-50 outline-none" value={newDoc.likes} onChange={e=>setNewDoc({...newDoc, likes: e.target.value})}/>
+                                            </div>
+                                            <button onClick={() => { 
+                                                if(!newDoc.hospitalName || !newDoc.doctorName || !newDoc.birthDate) return showToast('필수 정보를 입력하세요.', 'error'); 
+                                                setDoctorProfiles(prev => [{ id: Date.now(), ...newDoc }, ...prev]); 
+                                                setNewDoc({ hospitalName: '', doctorName: '', birthDate: '', isLunar: false, likes: '' }); 
+                                                showToast('프로필이 등록되었습니다.', 'success');
+                                            }} className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded text-xs font-bold transition h-[34px]">추가</button>
+                                        </div>
+
+                                        {/* 원장님 리스트 (틀 고정 및 줄바꿈 방지) */}
+                                        <div className="border border-gray-200 rounded-lg overflow-x-auto w-full flex-1 min-h-[140px] flex flex-col relative">
+                                            <table className="w-full text-xs text-left whitespace-nowrap min-w-[500px]">
+                                                <thead className="text-[11px] text-gray-500 bg-gray-50 font-bold border-b">
+                                                    <tr>
+                                                        <th className="px-3 py-2 w-1/4 sticky left-0 z-20 bg-gray-50 shadow-[1px_0_0_#eee]">병원/원장명</th>
+                                                        <th className="px-3 py-2 w-1/4">생일(구분)</th>
+                                                        <th className="px-3 py-2 w-1/4">관심사</th>
+                                                        <th className="px-3 py-2 w-1/4 text-center">관리</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody className="divide-y divide-gray-100">
+                                                    {(() => {
+                                                        const docItemsPerPage = isMobile ? 3 : 5;
+                                                        const maxDocPages = Math.ceil(doctorProfiles.length / docItemsPerPage) || 1;
+                                                        const safeDocPage = Math.min(docPage, maxDocPages);
+                                                        
+                                                        return doctorProfiles.slice((safeDocPage - 1) * docItemsPerPage, safeDocPage * docItemsPerPage).map(p => {
+                                                            const isEditing = editDocId === p.id;
+                                                            return (
+                                                                <tr key={p.id} className="hover:bg-indigo-50/30 transition group bg-white">
+                                                                    {isEditing ? (
+                                                                        <React.Fragment>
+                                                                            <td className="px-2 py-1 flex items-center gap-1 sticky left-0 z-10 bg-indigo-50 shadow-[1px_0_0_#eee]"><span className="text-[10px] text-gray-400">{p.hospitalName}</span> <input className="w-full border p-1 text-xs rounded" value={editDocData.doctorName} onChange={e=>setEditDocData({...editDocData, doctorName: e.target.value})} /></td>
+                                                                            <td className="px-2 py-1"><div className="flex gap-1"><input type="date" min="1940-01-01" className="w-full border p-1 text-xs rounded" value={editDocData.birthDate} onChange={e=>setEditDocData({...editDocData, birthDate: e.target.value})} /><select className="border p-1 text-xs rounded bg-white" value={editDocData.isLunar} onChange={e=>setEditDocData({...editDocData, isLunar: e.target.value==='true'})}><option value="false">양</option><option value="true">음</option></select></div></td>
+                                                                            <td className="px-2 py-1"><input className="w-full border p-1 text-xs rounded" value={editDocData.likes} onChange={e=>setEditDocData({...editDocData, likes: e.target.value})} /></td>
+                                                                            <td className="px-2 py-1 text-center flex justify-center gap-1">
+                                                                                <button onClick={() => { setDoctorProfiles(prev => prev.map(d => d.id === p.id ? {id: p.id, hospitalName: p.hospitalName, ...editDocData} : d)); setEditDocId(null); showToast('수정 완료', 'success'); }} className="bg-emerald-500 text-white px-2 py-1 rounded text-[10px] font-bold">저장</button>
+                                                                                <button onClick={() => setEditDocId(null)} className="bg-gray-400 text-white px-2 py-1 rounded text-[10px] font-bold">취소</button>
+                                                                            </td>
+                                                                        </React.Fragment>
+                                                                    ) : (
+                                                                        <React.Fragment>
+                                                                            <td className="px-3 py-2 font-bold text-gray-800 sticky left-0 z-10 bg-white group-hover:bg-indigo-50/50 shadow-[1px_0_0_#eee]">{p.hospitalName} <span className="text-gray-500 ml-1">{p.doctorName}</span></td>
+                                                                            <td className="px-3 py-2 text-gray-600">{p.birthDate} <span className={`text-[10px] font-bold px-1 rounded ml-1 ${p.isLunar ? 'bg-amber-100 text-amber-700' : 'bg-blue-100 text-blue-700'}`}>({p.isLunar ? '음' : '양'})</span></td>
+                                                                            <td className="px-3 py-2 text-gray-500 truncate max-w-[100px]">{p.likes}</td>
+                                                                            <td className="px-3 py-2 text-center">
+                                                                                <button onClick={() => { setEditDocId(p.id); setEditDocData({ doctorName: p.doctorName, birthDate: p.birthDate, isLunar: p.isLunar || false, likes: p.likes }); }} className="text-blue-500 bg-blue-50 px-2 py-1 rounded text-[10px] font-bold mr-1">수정</button>
+                                                                                <button onClick={() => { setDoctorProfiles(prev => prev.filter(d => d.id !== p.id)); showToast('삭제되었습니다', 'success'); }} className="text-rose-500 bg-rose-50 px-2 py-1 rounded text-[10px] font-bold">삭제</button>
+                                                                            </td>
+                                                                        </React.Fragment>
+                                                                    )}
+                                                                </tr>
+                                                            );
+                                                        });
+                                                    })()}
+                                                    {doctorProfiles.length === 0 && <tr><td colSpan="4" className="text-center py-4 text-gray-400 text-xs">등록된 원장님이 없습니다.</td></tr>}
+                                                </tbody>
+                                            </table>
+                                            
+                                            {/* 페이징 컨테이너 */}
+                                            {(() => {
+                                                const docItemsPerPage = isMobile ? 3 : 5;
+                                                const maxDocPages = Math.ceil(doctorProfiles.length / docItemsPerPage) || 1;
+                                                const safeDocPage = Math.min(docPage, maxDocPages);
+                                                return (
+                                                    <div className="flex justify-center gap-2 p-2 bg-gray-50 border-t mt-auto sticky left-0 right-0">
+                                                        <button onClick={()=>setDocPage(Math.max(1, safeDocPage-1))} className="px-2 py-0.5 bg-white border rounded text-xs hover:bg-gray-100"><i className="fas fa-chevron-left"></i></button>
+                                                        <span className="text-xs font-bold pt-0.5 px-2">{safeDocPage} / {maxDocPages}</span>
+                                                        <button onClick={()=>setDocPage(Math.min(maxDocPages, safeDocPage+1))} className="px-2 py-0.5 bg-white border rounded text-xs hover:bg-gray-100"><i className="fas fa-chevron-right"></i></button>
+                                                    </div>
+                                                );
+                                            })()}
+                                        </div>
+                                    </div>
+                                    
+                                    <div className="w-full md:w-64 bg-gray-50 p-4 rounded-xl border border-gray-200 shrink-0">
+                                        <h4 className="font-bold text-sm mb-3 text-gray-700"><i className="fas fa-lock text-gray-500 mr-2"></i> 비밀번호 변경</h4>
+                                        <div className="flex gap-2">
+                                            <input type="password" placeholder="새 비밀번호" className="w-full border p-2 rounded text-xs outline-none focus:border-gray-500" value={newAdminPin} onChange={e=>setNewAdminPin(e.target.value)} />
+                                            <button onClick={() => { if(newAdminPin) { setSettings({...settings, adminPin: newAdminPin}); setNewAdminPin(''); showToast('비밀번호가 변경되었습니다.', 'success'); } }} className="bg-gray-800 text-white px-3 py-2 rounded text-xs font-bold whitespace-nowrap">변경</button>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div className="bg-white p-4 border border-gray-200 rounded-xl shadow-sm flex-1 flex flex-col min-h-[300px]">
+                                <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-3 gap-2">
+                                    <h4 className="font-bold text-sm text-gray-700"><i className="fas fa-list-ul mr-2 text-gray-500"></i> {adminDate.month}월 매출 등록 리스트</h4>
+                                    <div className="flex items-center gap-2">
+                                        <div className="flex gap-1 bg-green-50 p-1 rounded-lg border border-green-200 mr-2">
+                                            <button onClick={() => exportCSV('all')} className="text-[10px] font-bold text-green-700 bg-white px-2 py-1 rounded shadow-sm border border-green-200 hover:bg-green-100"><i className="fas fa-file-excel mr-1"></i>당월 일괄 다운</button>
+                                            <button onClick={() => exportCSV('yearly')} className="text-[10px] font-bold text-green-700 bg-white px-2 py-1 rounded shadow-sm border border-green-200 hover:bg-green-100"><i className="fas fa-file-excel mr-1"></i>연간 전체 다운</button>
+                                        </div>
+                                        
+                                        {(() => {
+                                            const adminFilteredData = salesData.filter(d => d.year === adminDate.year && d.month === adminDate.month).sort((a,b) => b.amount - a.amount);
+                                            const itemsPerPage = isMobile ? 5 : 8;
+                                            const totalPages = Math.ceil(adminFilteredData.length / itemsPerPage) || 1;
+                                            const safePage = Math.min(adminPage, totalPages);
+                                            return (
+                                                <div className="flex gap-1 bg-gray-50 p-1 rounded border">
+                                                    <button onClick={()=>setAdminPage(Math.max(1, safePage-1))} className="px-2 py-0.5 bg-white border rounded text-xs hover:bg-gray-100"><i className="fas fa-chevron-left"></i></button>
+                                                    <span className="text-xs font-bold px-2">{safePage} / {totalPages}</span>
+                                                    <button onClick={()=>setAdminPage(Math.min(totalPages, safePage+1))} className="px-2 py-0.5 bg-white border rounded text-xs hover:bg-gray-100"><i className="fas fa-chevron-right"></i></button>
+                                                </div>
+                                            );
+                                        })()}
+                                    </div>
+                                </div>
+                                
+                                {}
+                                <div className="border border-gray-200 rounded-lg overflow-x-auto flex-1 relative">
+                                    <table className="w-full text-sm text-left whitespace-nowrap min-w-[600px]">
+                                        <thead className="text-[11px] text-gray-500 bg-gray-50 uppercase font-bold border-b">
+                                            <tr>
+                                                <th className="px-3 py-2 w-12 text-center sticky left-0 z-20 bg-gray-50 shadow-[1px_0_0_#eee]">No.</th>
+                                                <th className="px-3 py-2 sticky left-[48px] z-20 bg-gray-50 shadow-[1px_0_0_#eee]">병원명</th>
+                                                <th className="px-3 py-2 text-right">{adminDate.month}월 매출액</th>
+                                                <th className="px-3 py-2 text-right text-blue-600 bg-blue-50/50">1~{adminDate.month}월 누적</th>
+                                                <th className="px-3 py-2 w-32 text-center">관리</th>
+                                                <th className="px-2 py-2 w-20 text-center">다운로드</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody className="divide-y divide-gray-100">
+                                            {(() => {
+                                                const adminFilteredData = salesData.filter(d => d.year === adminDate.year && d.month === adminDate.month).sort((a,b) => b.amount - a.amount);
+                                                const itemsPerPage = isMobile ? 5 : 8;
+                                                const safePage = Math.min(adminPage, Math.ceil(adminFilteredData.length / itemsPerPage) || 1);
+                                                const pagedData = adminFilteredData.slice((safePage - 1) * itemsPerPage, safePage * itemsPerPage);
+
+                                                if (pagedData.length === 0) return <tr><td colSpan="6" className="text-center py-8 text-sm text-gray-400">데이터가 없습니다.</td></tr>;
+
+                                                return pagedData.map((item, idx) => {
+                                                    const accumAmount = salesData.filter(d => d.year === adminDate.year && d.month <= adminDate.month && d.hospitalName === item.hospitalName).reduce((sum, d) => sum + Number(d.amount), 0);
+                                                    return (
+                                                        <tr key={item.id} className="hover:bg-emerald-50/30 transition group bg-white">
+                                                            <td className="px-3 py-2 text-center text-gray-400 font-bold text-xs sticky left-0 z-10 bg-white group-hover:bg-emerald-50/50 shadow-[1px_0_0_#eee]">{(safePage - 1) * itemsPerPage + idx + 1}</td>
+                                                            <td className="px-3 py-2 font-bold text-xs text-gray-700 sticky left-[48px] z-10 bg-white group-hover:bg-emerald-50/50 shadow-[1px_0_0_#eee]">{item.hospitalName}</td>
+                                                            <td className="px-3 py-2 font-black text-gray-800 text-xs text-right">{formatCurr(item.amount)}</td>
+                                                            <td className="px-3 py-2 font-black text-blue-700 text-xs text-right bg-blue-50/30">{formatCurr(accumAmount)}</td>
+                                                            <td className="px-3 py-2 text-center">
+                                                                <button onClick={() => { setSalesData(prev => prev.filter(i => i.id !== item.id)); showToast('삭제되었습니다.','success'); }} className="text-rose-600 bg-rose-50 border border-rose-100 px-2 py-1 rounded text-[10px] font-bold">삭제</button>
+                                                            </td>
+                                                            <td className="px-2 py-2 text-center">
+                                                                <button onClick={() => exportCSV('hospital', item.hospitalName)} className="text-green-700 bg-green-50 border border-green-200 px-2 py-1 rounded text-[10px] font-bold"><i className="fas fa-download"></i></button>
+                                                            </td>
+                                                        </tr>
+                                                    );
+                                                });
+                                            })()}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {}
+                    {/* Tax Modal (비용 선택 기반 시뮬레이터 적용) */}
+                    {showTaxModal && (
+                        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+                            <div className="bg-white rounded-3xl p-6 w-full max-w-md shadow-2xl relative">
+                                <button onClick={() => setShowTaxModal(false)} className="absolute top-4 right-4 text-gray-400 hover:text-gray-800"><i className="fas fa-times text-xl"></i></button>
+                                <h3 className="font-black text-xl mb-1 text-gray-800"><i className="fas fa-file-invoice-dollar text-emerald-500 mr-2"></i>세금납부 상세 시뮬레이션</h3>
+                                <p className="text-[11px] text-gray-500 mb-4 pb-3 border-b border-gray-100">
+                                    개인사업자 세법 기준(부가세는 반기, 종소세는 연간) 과세기간에 맞춰<br/>해당 기간의 누적 매출을 자동으로 끌어와 예상 세액을 산출합니다.
+                                </p>
+                                
+                                <div className="mb-4">
+                                    <label className="text-[11px] font-bold text-gray-500 block mb-2"><i className="fas fa-calculator mr-1"></i> 누적 비용 직접 입력 (세금 공제용 과세표준 산출)</label>
+                                    
+                                    <div className="relative">
+                                        <input 
+                                            type="text"
+                                            value={taxCostOption === 0 ? '' : new Intl.NumberFormat('ko-KR').format(taxCostOption)}
+                                            onChange={(e) => {
+                                                const rawValue = e.target.value.replace(/[^0-9]/g, "");
+                                                setTaxCostOption(Number(rawValue));
+                                            }}
+                                            placeholder="비용을 직접 입력하세요 (예: 69,696,969)"
+                                            className="w-full appearance-none bg-gray-50 border border-gray-300 text-gray-800 text-sm font-bold rounded-lg focus:ring-emerald-500 focus:border-emerald-500 block p-2.5 outline-none"
+                                        />
+                                    </div>
+                                    <p className="text-[10px] text-gray-400 mt-1.5 pl-1">* 각 세금별 과세기간 매출액에서 입력된 비용을 차감하여 시뮬레이션 합니다.</p>
+                                </div>
+
+                                <div className="space-y-3 mb-5">
+                                    <div className="bg-emerald-50 rounded-xl p-3 border border-emerald-100 relative">
+                                        <div className="absolute -top-2.5 right-3 bg-emerald-500 text-white text-[10px] font-black px-2 py-0.5 rounded-full shadow-sm">D-{taxEstimate.diffVat}</div>
+                                        <div className="flex justify-between items-end mb-1">
+                                            <span className="font-bold text-sm text-emerald-900">1. 부가가치세 <span className="text-[10px] font-normal text-emerald-700 block mt-0.5">{taxEstimate.vatPeriod} 매출액: <span className="font-bold">{formatCurr(taxEstimate.vatSales)}</span></span></span>
+                                            <span className="font-black text-lg text-emerald-800">{formatCurr(taxEstimate.vat)}</span>
+                                        </div>
+                                        <div className="text-[10px] text-emerald-600 font-bold bg-white px-2 py-1 rounded inline-block mt-1 text-right w-full">예정 납부일: {taxEstimate.nextVatDateStr}</div>
+                                    </div>
+
+                                    <div className="bg-amber-50 rounded-xl p-3 border border-amber-100 relative">
+                                        <div className="absolute -top-2.5 right-3 bg-amber-500 text-white text-[10px] font-black px-2 py-0.5 rounded-full shadow-sm">D-{taxEstimate.diffInc}</div>
+                                        <div className="flex justify-between items-end mb-1">
+                                            <span className="font-bold text-sm text-amber-900">2. 종합소득세 <span className="text-[10px] font-normal text-amber-700 block mt-0.5">{currentDate.year}년 연간 과세기간 매출액: <span className="font-bold">{formatCurr(taxEstimate.incSales)}</span></span></span>
+                                            <span className="font-black text-lg text-amber-800">{formatCurr(taxEstimate.incTax)}</span>
+                                        </div>
+                                        <div className="text-[10px] text-amber-600 font-bold bg-white px-2 py-1 rounded inline-block mt-1 text-right w-full">정기 신고일: {taxEstimate.incDateStr}</div>
+                                    </div>
+
+                                    <div className="bg-blue-50 rounded-xl p-3 border border-blue-100 relative">
+                                        <div className="absolute -top-2.5 right-3 bg-blue-500 text-white text-[10px] font-black px-2 py-0.5 rounded-full shadow-sm">D-{taxEstimate.diffInc}</div>
+                                        <div className="flex justify-between items-center">
+                                            <span className="font-bold text-sm text-blue-900">3. 지방소득세 <span className="text-[10px] font-normal text-blue-700 ml-1">(종소세의 10%)</span></span>
+                                            <span className="font-black text-base text-blue-800">{formatCurr(taxEstimate.localTax)}</span>
+                                        </div>
+                                    </div>
+
+                                    <div className="flex justify-between items-center bg-gray-900 p-4 rounded-xl shadow-inner mt-2">
+                                        <span className="font-bold text-gray-300">합계 예상 세액</span>
+                                        <span className="font-black text-white text-xl">{formatCurr(taxEstimate.totalTax)}</span>
+                                    </div>
+                                </div>
+                                
+                                <div className="bg-gray-100 p-3 rounded-lg border border-gray-200 flex gap-2 items-start">
+                                    <i className="fas fa-info-circle text-gray-500 mt-0.5"></i>
+                                    <p className="text-xs font-bold text-gray-600 leading-tight">{taxEstimate.comment}</p>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+                    
+                    {/* Book Modal */}
+                    {bookModal && (
+                        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4" onClick={() => setBookModal(null)}>
+                            <div className="bg-white rounded-3xl p-6 w-full max-w-sm shadow-2xl relative" onClick={e => e.stopPropagation()}>
+                                <button onClick={() => setBookModal(null)} className="absolute top-4 right-4 text-gray-400 hover:text-gray-800"><i className="fas fa-times text-xl"></i></button>
+                                <div className="bg-amber-50 w-12 h-12 rounded-full flex items-center justify-center text-amber-500 mb-4"><i className="fas fa-book text-2xl"></i></div>
+                                <h3 className="font-black text-xl mb-1 text-gray-800">{bookModal.title}</h3>
+                                <p className="text-sm font-bold text-amber-600 mb-4 pb-3 border-b border-gray-100">{bookModal.author}</p>
+                                <p className="text-gray-600 text-sm leading-relaxed whitespace-pre-wrap mb-5">{bookModal.summary}</p>
+                                
+                                <div className="bg-gray-50 p-3 rounded-xl border border-gray-200">
+                                    <div className="flex justify-between text-xs mb-1 text-gray-500"><span className="line-through">정가: {new Intl.NumberFormat('ko-KR').format(bookModal.price)}원</span></div>
+                                    <div className="flex justify-between items-center">
+                                        <span className="font-bold text-sm text-gray-800">인터넷 할인가</span>
+                                        <span className="font-black text-rose-600 text-lg">{new Intl.NumberFormat('ko-KR').format(bookModal.discount)}원</span>
+                                    </div>
+                                    <div className="mt-2 text-center text-[10px] font-bold text-blue-600 bg-blue-50 py-1.5 rounded-lg border border-blue-100 cursor-pointer hover:bg-blue-100 transition"><i className="fas fa-external-link-alt mr-1"></i> {bookModal.link}</div>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {toast && (
+                        <div className={`fixed bottom-4 left-1/2 transform -translate-x-1/2 px-5 py-2.5 rounded-full text-sm font-bold shadow-lg z-50 text-white ${toast.type === 'error' ? 'bg-rose-500' : 'bg-gray-800'} transition-all flex items-center gap-2`}>
+                            <i className={`fas ${toast.type === 'error' ? 'fa-exclamation-circle' : 'fa-check-circle'}`}></i> {toast.msg}
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        ReactDOM.render(<App />, document.getElementById('root'));
+    </script>
+</body>
+</html>
