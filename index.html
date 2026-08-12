@@ -1,0 +1,1111 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>J PHARM Sales Dashboard</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/react@17/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@17/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/babel-standalone@6/babel.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/lunar-javascript/lunar.min.js"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800;900&display=swap" rel="stylesheet">
+    
+    <style>
+        body { font-family: 'Inter', sans-serif; background-color: #f1f5f9; overflow: hidden; }
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+        .chart-bar { transition: width 1s cubic-bezier(0.4, 0, 0.2, 1); }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        .animate-fade-in { animation: fadeIn 0.3s ease-out forwards; }
+    </style>
+</head>
+<body class="h-screen w-screen overflow-hidden text-gray-800 bg-sky-50/30">
+    <div id="root" class="h-full w-full"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useMemo } = React;
+
+        const getDefaultDate = () => {
+            const today = new Date();
+            return { year: today.getFullYear(), month: today.getMonth() + 1 };
+        };
+
+        const formatCurr = (num) => new Intl.NumberFormat('ko-KR').format(Math.ceil(Number(num))) + '원';
+        const fmtTemp = (t) => t !== undefined ? Number(t).toFixed(1) : '-';
+        
+        const getWeatherIcon = (code) => {
+            if (code === 0) return '☀️';
+            if (code === 1 || code === 2 || code === 3) return '⛅';
+            if (code === 45 || code === 48) return '🌫️';
+            if (code >= 51 && code <= 67) return '🌧️';
+            if (code >= 71 && code <= 77) return '❄️';
+            if (code >= 80 && code <= 82) return '🌦️';
+            if (code >= 95) return '⛈️';
+            return '☁️';
+        };
+        
+        const formatDateWithDay = (date) => {
+            const y = date.getFullYear();
+            const m = String(date.getMonth() + 1).padStart(2, '0');
+            const d = String(date.getDate()).padStart(2, '0');
+            return `${y}년 ${m}월 ${d}일`;
+        };
+
+        function App() {
+            const [view, setView] = useState('main'); 
+            const [salesData, setSalesData] = useState(() => {
+                const saved = localStorage.getItem('jpharm_sales_data');
+                return saved ? JSON.parse(saved) : [];
+            });
+            const [settings, setSettings] = useState(() => {
+                const saved = localStorage.getItem('jpharm_settings');
+                return saved ? JSON.parse(saved) : { 
+                    adminPin: '6969', logoText: 'J PHARM.', logoImage: '', bannerImage: '',
+                    monthlyTargets: {} 
+                };
+            });
+            const [hospitalMaster, setHospitalMaster] = useState(() => {
+                const saved = localStorage.getItem('jpharm_hospital_master');
+                return saved ? JSON.parse(saved) : ['서울대병원', '아산병원', '세브란스', '삼성의료원', '성모병원'];
+            });
+            const [doctorProfiles, setDoctorProfiles] = useState(() => {
+                const saved = localStorage.getItem('jpharm_doctor_profiles');
+                return saved ? JSON.parse(saved) : [];
+            });
+
+            const [currentDate, setCurrentDate] = useState(getDefaultDate());
+            const [toast, setToast] = useState(null);
+            const [loginPin, setLoginPin] = useState("");
+            const [isConnected, setIsConnected] = useState(navigator.onLine);
+            
+            // Admin Form States
+            const [adminTab, setAdminTab] = useState('data');
+            const [adminDate, setAdminDate] = useState(getDefaultDate());
+            const [newAdminPin, setNewAdminPin] = useState('');
+            const [manualHosp, setManualHosp] = useState('');
+            const [manualAmt, setManualAmt] = useState('');
+            const [manualComm, setManualComm] = useState('');
+            const [commType, setCommType] = useState('fixed'); 
+            
+            const [newDoc, setNewDoc] = useState({ hospitalName: '', doctorName: '', birthDate: '', isLunar: false, likes: '', family: '' });
+            
+            // Edit States
+            const [editingSalesId, setEditingSalesId] = useState(null);
+            const [editSalesForm, setEditSalesForm] = useState({});
+            const [editingDocId, setEditingDocId] = useState(null);
+            const [editDocForm, setEditDocForm] = useState({});
+
+            // Pagination
+            const [adminSalesPage, setAdminSalesPage] = useState(1);
+            const [adminDocPage, setAdminDocPage] = useState(1);
+            const [bdayPage, setBdayPage] = useState(1);
+            const [rankPage, setRankPage] = useState(1);
+
+            // Modals & Charts
+            const [showTaxModal, setShowTaxModal] = useState(false);
+            const [hospModalData, setHospModalData] = useState(null);
+            const [selectedDocDetail, setSelectedDocDetail] = useState(null);
+            const [selectedBook, setSelectedBook] = useState(null);
+            
+            const [chartSort, setChartSort] = useState('current'); 
+            const [chartRendered, setChartRendered] = useState(false);
+            
+            const [vatCostOption, setVatCostOption] = useState(''); 
+            const [incCostOption, setIncCostOption] = useState('');
+            const [weatherData, setWeatherData] = useState(null);
+            const [targetViewYear, setTargetViewYear] = useState(getDefaultDate().year);
+
+            // LocalStorage Sync
+            useEffect(() => { localStorage.setItem('jpharm_sales_data', JSON.stringify(salesData)); }, [salesData]);
+            useEffect(() => { localStorage.setItem('jpharm_settings', JSON.stringify(settings)); }, [settings]);
+            useEffect(() => { localStorage.setItem('jpharm_hospital_master', JSON.stringify(hospitalMaster)); }, [hospitalMaster]);
+            useEffect(() => { localStorage.setItem('jpharm_doctor_profiles', JSON.stringify(doctorProfiles)); }, [doctorProfiles]);
+
+            useEffect(() => {
+                const fetchWeather = async () => {
+                    try {
+                        const [wonjuRes, jecheonRes] = await Promise.all([
+                            fetch('https://api.open-meteo.com/v1/forecast?latitude=37.3422&longitude=127.9202&daily=temperature_2m_max,temperature_2m_min,weathercode&timezone=Asia%2FSeoul&forecast_days=2'),
+                            fetch('https://api.open-meteo.com/v1/forecast?latitude=37.1326&longitude=128.2141&daily=temperature_2m_max,temperature_2m_min,weathercode&timezone=Asia%2FSeoul&forecast_days=2')
+                        ]);
+                        const wonjuData = await wonjuRes.json();
+                        const jecheonData = await jecheonRes.json();
+                        if (wonjuData.daily && jecheonData.daily) {
+                            setWeatherData({ wonju: wonjuData.daily, jecheon: jecheonData.daily });
+                        }
+                    } catch(e) { console.error(e); }
+                };
+                if (navigator.onLine) fetchWeather();
+                
+                const handleOnline = () => { setIsConnected(true); fetchWeather(); };
+                const handleOffline = () => { setIsConnected(false); };
+                window.addEventListener('online', handleOnline);
+                window.addEventListener('offline', handleOffline);
+                setTimeout(() => setChartRendered(true), 300);
+                return () => { window.removeEventListener('online', handleOnline); window.removeEventListener('offline', handleOffline); };
+            }, []);
+
+            const showToast = (msg, type='info') => {
+                setToast({msg, type});
+                setTimeout(() => setToast(null), 3000);
+            };
+
+            const filteredData = useMemo(() => salesData.filter(d => d.year === currentDate.year && d.month === currentDate.month), [salesData, currentDate]);
+            const ytdData = useMemo(() => salesData.filter(d => d.year === currentDate.year && d.month <= currentDate.month), [salesData, currentDate]);
+
+            const monthlyTotal = useMemo(() => filteredData.reduce((sum, curr) => sum + Number(curr.amount || 0), 0), [filteredData]);
+            const monthlyCommTotal = useMemo(() => filteredData.reduce((sum, curr) => sum + Number(curr.commission || 0), 0), [filteredData]);
+            const monthlyNetIncome = monthlyTotal - monthlyCommTotal;
+            
+            const currentMonthTarget = useMemo(() => settings.monthlyTargets[`${currentDate.year}-${currentDate.month}`] || 0, [settings.monthlyTargets, currentDate]);
+            const monthlyAchieve = currentMonthTarget > 0 ? Math.min(100, Math.round((monthlyTotal / currentMonthTarget) * 100)) : 0;
+
+            const ytdTotal = useMemo(() => ytdData.reduce((sum, curr) => sum + Number(curr.amount || 0), 0), [ytdData]);
+            const ytdCommTotal = useMemo(() => ytdData.reduce((sum, curr) => sum + Number(curr.commission || 0), 0), [ytdData]);
+            const ytdNetIncome = ytdTotal - ytdCommTotal;
+            
+            const currentYearTarget = useMemo(() => {
+                let total = 0;
+                for(let i=1; i<=12; i++) total += (settings.monthlyTargets[`${currentDate.year}-${i}`] || 0);
+                return total;
+            }, [settings.monthlyTargets, currentDate.year]);
+            const yearlyAchieve = currentYearTarget > 0 ? Math.min(100, Math.round((ytdTotal / currentYearTarget) * 100)) : 0;
+
+            const hospitalStats = useMemo(() => {
+                const stats = {};
+                salesData.forEach(d => {
+                    if (d.year === currentDate.year && d.month <= currentDate.month) {
+                        if (!stats[d.hospitalName]) stats[d.hospitalName] = { id: d.hospitalName, hospitalName: d.hospitalName, current: 0, accumulated: 0 };
+                        const net = Number(d.amount || 0) - Number(d.commission || 0);
+                        if (d.month === currentDate.month) stats[d.hospitalName].current += net;
+                        stats[d.hospitalName].accumulated += net;
+                    }
+                });
+                return Object.values(stats);
+            }, [salesData, currentDate]);
+
+            const displayedHospitals = useMemo(() => [...hospitalStats].filter(h => h[chartSort] > 0).sort((a, b) => b[chartSort] - a[chartSort]), [hospitalStats, chartSort]);
+            const maxAmount = displayedHospitals.length > 0 ? Math.max(...displayedHospitals.map(d => d[chartSort])) : 1;
+            
+            const totalRankPages = Math.max(1, Math.ceil(displayedHospitals.length / 5));
+            const currentRankData = displayedHospitals.slice((rankPage - 1) * 5, rankPage * 5);
+
+            const openHospModal = (hName) => {
+                if(!hName) return;
+                const doc = doctorProfiles.find(d => d.hospitalName === hName);
+                const hSales = salesData.filter(d => d.hospitalName === hName && d.year === currentDate.year && d.month <= currentDate.month);
+                
+                const curSales = hSales.filter(d => d.month === currentDate.month);
+                const curAmt = curSales.reduce((s, d) => s + Number(d.amount||0), 0);
+                const curComm = curSales.reduce((s, d) => s + Number(d.commission||0), 0);
+                
+                const accAmt = hSales.reduce((s, d) => s + Number(d.amount||0), 0);
+                const accComm = hSales.reduce((s, d) => s + Number(d.commission||0), 0);
+
+                setHospModalData({
+                    hospitalName: hName,
+                    doctorName: doc ? doc.doctorName : '미등록',
+                    curAmt, curComm, curNet: curAmt - curComm,
+                    accAmt, accComm, accNet: accAmt - accComm
+                });
+            };
+
+            const taxEstimate = useMemo(() => {
+                const today = new Date();
+                const y = today.getFullYear();
+                let vatD1 = new Date(y, 0, 25); let vatD2 = new Date(y, 6, 25);
+                if(today > vatD2) vatD1 = new Date(y+1, 0, 25);
+                const nextVatDate = (today <= vatD1 || today > vatD2) ? vatD1 : vatD2;
+                
+                const realVatYear = nextVatDate.getMonth() === 0 ? nextVatDate.getFullYear() - 1 : nextVatDate.getFullYear();
+                const vatPeriod = nextVatDate.getMonth() === 0 ? `${realVatYear}년 2기 (7.1~12.31)` : `${realVatYear}년 1기 (1.1~6.30)`;
+                const isFirstHalf = nextVatDate.getMonth() !== 0;
+                
+                let incDate = new Date(y, 4, 31);
+                if(today > incDate) incDate = new Date(y+1, 4, 31);
+                const incPeriod = `${incDate.getFullYear()-1}년 (1.1~12.31)`;
+
+                const vatSales = salesData.filter(d => d.year === realVatYear && (isFirstHalf ? d.month <= 6 : d.month > 6)).reduce((sum, curr) => sum + Number(curr.amount || 0), 0);
+                const incSales = salesData.filter(d => d.year === incDate.getFullYear()-1).reduce((sum, curr) => sum + Number(curr.amount || 0), 0);
+                
+                const vCost = Number(vatCostOption.replace(/,/g, '')) || 0;
+                const iCost = Number(incCostOption.replace(/,/g, '')) || 0;
+
+                const vat = Math.max(0, Math.ceil(vatSales * 0.1) - Math.ceil(vCost * 0.1)); 
+                const netRevenue = Math.max(0, incSales - iCost);
+                let incTax = 0;
+                
+                if (netRevenue <= 14000000) { incTax = netRevenue * 0.06; }
+                else if (netRevenue <= 50000000) { incTax = 840000 + (netRevenue - 14000000) * 0.15; }
+                else if (netRevenue <= 88000000) { incTax = 6240000 + (netRevenue - 50000000) * 0.24; }
+                else if (netRevenue <= 150000000) { incTax = 15360000 + (netRevenue - 88000000) * 0.35; }
+                else { incTax = 37060000 + (netRevenue - 150000000) * 0.38; }
+                
+                const localTax = Math.ceil(incTax * 0.1); 
+
+                const diffVat = Math.ceil((nextVatDate - today)/(1000*60*60*24));
+                const diffInc = Math.ceil((incDate - today)/(1000*60*60*24));
+                
+                return { vat, incTax, localTax, totalTax: vat + incTax + localTax, nextVatDateStr: formatDateWithDay(nextVatDate), vatPeriod, diffVat, incDateStr: formatDateWithDay(incDate), incPeriod, diffInc, vatSales, incSales };
+            }, [salesData, vatCostOption, incCostOption]);
+
+            const upcomingBirthdays = useMemo(() => {
+                const today = new Date();
+                const todayNorm = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+                const curY = todayNorm.getFullYear();
+                
+                return doctorProfiles.filter(p => p.birthDate).map(p => {
+                    const parts = p.birthDate.split('-');
+                    if(parts.length !== 3) return { ...p, dday: 999, calcSolarDate: '' };
+                    const m = Number(parts[1]), d = Number(parts[2]);
+                    let bday;
+                    if (p.isLunar && window.Lunar) {
+                        try {
+                            let lunar = window.Lunar.fromYmd(curY, m, d);
+                            let solar = lunar.getSolar();
+                            bday = new Date(solar.getYear(), solar.getMonth() - 1, solar.getDay());
+                            if (bday < todayNorm) {
+                                lunar = window.Lunar.fromYmd(curY + 1, m, d);
+                                solar = lunar.getSolar();
+                                bday = new Date(solar.getYear(), solar.getMonth() - 1, solar.getDay());
+                            }
+                        } catch(e) { bday = new Date(curY, m - 1, d); }
+                    } else {
+                        bday = new Date(curY, m - 1, d);
+                        if (bday < todayNorm) bday.setFullYear(curY + 1);
+                    }
+                    const dday = Math.ceil((bday - todayNorm) / (1000 * 60 * 60 * 24));
+                    return { ...p, dday, calcSolarDate: `${String(bday.getMonth()+1).padStart(2,'0')}.${String(bday.getDate()).padStart(2,'0')}` };
+                }).sort((a,b) => a.dday - b.dday);
+            }, [doctorProfiles]);
+            const totalBdayPages = Math.max(1, Math.ceil(upcomingBirthdays.length / 5));
+
+            const weeklyBooks = [
+                { title: '세일즈의 심리학', author: '브라이언 트레이시', summary: '고객의 마음을 여는 강력한 세일즈 기법과 심리 전술을 다룬 바이블. 어떻게 고객의 방어기제를 허물고 신뢰를 구축할 수 있는지 실전 사례를 통해 배웁니다.', price: 16000, discount: 14400, link: '교보문고, YES24' },
+                { title: '기브 앤 테이크', author: '애덤 그랜트', summary: '타인을 돕는 이타적인 사람이 결국 더 큰 성공을 거둔다는 관계의 법칙. 양보와 배려가 어떻게 최고의 비즈니스 성과로 돌아오는지 증명합니다.', price: 18000, discount: 16200, link: '교보문고, 알라딘' },
+                { title: '설득의 심리학', author: '로버트 치알디니', summary: '사람의 마음을 사로잡고 승낙을 이끌어내는 6가지 불변의 법칙. 고객이 무의식적으로 "YES"를 외치게 만드는 설득의 비밀을 파헤칩니다.', price: 22000, discount: 19800, link: '인터넷 서점 최저가' },
+                { title: '데일 카네기 인간관계론', author: '데일 카네기', summary: '적을 만들지 않고 사람의 마음을 얻는 최고의 고전. 어떻게 하면 논쟁을 피하고 상대를 내 편으로 만들 수 있는지 명쾌한 해답을 줍니다.', price: 11500, discount: 10350, link: 'YES24, 밀리의 서재' },
+                { title: '초격차', author: '권오현', summary: '넘볼 수 없는 차이를 만드는 리더와 조직의 조건. 한계를 돌파하고 시장을 주도하는 압도적인 1등이 되기 위한 전략적 사고방식을 제시합니다.', price: 17000, discount: 15300, link: 'YES24' }
+            ];
+
+            const dailyQuote = useMemo(() => {
+                const quotes = [
+                    "사랑하는 아내 김경옥, 눈에 넣어도 아프지 않을 딸 박주아. 가족을 향한 박현재의 땀방울이 내일의 더 큰 기쁨으로 돌아올 것입니다! 화이팅!",
+                    "사랑하는 아내 김경옥, 눈에 넣어도 아프지 않을 딸 박주아. 가족의 환한 미소가 박현재의 오늘을 달리게 하는 가장 큰 원동력입니다! 화이팅!",
+                    "사랑하는 아내 김경옥, 눈에 넣어도 아프지 않을 딸 박주아. 든든한 가족을 등에 업은 박현재는 오늘도 거침없이 달립니다! 화이팅!"
+                ];
+                const daysSinceEpoch = Math.floor(new Date().getTime() / (1000 * 60 * 60 * 24));
+                return quotes[daysSinceEpoch % quotes.length];
+            }, []);
+
+            const loginQuotes = [
+                "원장님의 사소한 취향을 기억하는 것, 그것이 마음을 여는 첫걸음입니다.",
+                "영업은 단순히 상품을 파는 것이 아니라, 신뢰와 가치를 선물하는 과정입니다.",
+                "오늘 건넨 따뜻한 안부 인사 한마디가 내일의 든든한 파트너십을 만듭니다."
+            ];
+            const todayLoginQuote = loginQuotes[Math.floor(new Date().getTime() / 86400000) % loginQuotes.length];
+
+            const handleManualAmtChange = (e) => {
+                const r = e.target.value.replace(/[^0-9]/g, "");
+                setManualAmt(r ? new Intl.NumberFormat('ko-KR').format(Number(r)) : '');
+            };
+
+            const handleManualCommChange = (e) => {
+                if (commType === 'percent') setManualComm(e.target.value.replace(/[^0-9.]/g, ""));
+                else {
+                    const r = e.target.value.replace(/[^0-9]/g, "");
+                    setManualComm(r ? new Intl.NumberFormat('ko-KR').format(Number(r)) : '');
+                }
+            };
+
+            const handleManualSubmit = () => {
+                const numAmt = Math.ceil(Number(manualAmt.replace(/,/g, '')));
+                let numComm = 0;
+                if (commType === 'percent') numComm = Math.ceil(numAmt * ((Number(manualComm) || 0) / 100));
+                else numComm = Math.ceil(Number(manualComm.replace(/,/g, ''))) || 0;
+                
+                if (!manualHosp || !numAmt) return showToast('병원명과 매출액을 입력해주세요.', 'error');
+                
+                setSalesData(prev => [{ id: Date.now(), year: adminDate.year, month: adminDate.month, hospitalName: manualHosp, amount: numAmt, commission: numComm }, ...prev]);
+                if (!hospitalMaster.includes(manualHosp)) setHospitalMaster(prev => [...prev, manualHosp].sort());
+                showToast(`${manualHosp} 등록 완료`, 'success');
+                setManualHosp(''); setManualAmt(''); setManualComm('');
+            };
+
+            const filteredAdminSales = useMemo(() => salesData.filter(d => d.year === adminDate.year && d.month === adminDate.month), [salesData, adminDate]);
+            const totalAdminSalesPages = Math.max(1, Math.ceil(filteredAdminSales.length / 5));
+            const currentAdminSalesData = filteredAdminSales.slice((adminSalesPage - 1) * 5, adminSalesPage * 5);
+            
+            const totalAdminDocPages = Math.max(1, Math.ceil(doctorProfiles.length / 5));
+            const currentAdminDocData = doctorProfiles.slice((adminDocPage - 1) * 5, adminDocPage * 5);
+
+            const saveSalesEdit = () => {
+                setSalesData(prev => prev.map(item => item.id === editingSalesId ? { ...item, amount: Number(editSalesForm.amount.replace(/,/g,'')), commission: Number(editSalesForm.commission.replace(/,/g,'')) } : item));
+                setEditingSalesId(null);
+                showToast('매출 수정 완료', 'success');
+            };
+
+            const saveDocEdit = () => {
+                setDoctorProfiles(prev => prev.map(item => item.id === editingDocId ? { ...item, hospitalName: editDocForm.hospitalName, doctorName: editDocForm.doctorName, birthDate: editDocForm.birthDate, isLunar: editDocForm.isLunar, likes: editDocForm.likes, family: editDocForm.family } : item));
+                setEditingDocId(null);
+                showToast('프로필 수정 완료', 'success');
+            };
+
+            const targetTableData = useMemo(() => {
+                let sum = 0;
+                const months = [];
+                for(let i=1; i<=12; i++) {
+                    const amt = settings.monthlyTargets[`${targetViewYear}-${i}`] || 0;
+                    sum += amt;
+                    months.push(amt);
+                }
+                return { sum, months };
+            }, [settings.monthlyTargets, targetViewYear]);
+
+            // File Uploads
+            const handleLogoUpload = (e) => {
+                const file = e.target.files[0];
+                if (file) {
+                    const reader = new FileReader();
+                    reader.onload = (event) => { setSettings({...settings, logoImage: event.target.result}); showToast('로고 업로드 완료', 'success'); };
+                    reader.readAsDataURL(file);
+                }
+            };
+            const handleBannerUpload = (e) => {
+                const file = e.target.files[0];
+                if (file) {
+                    const reader = new FileReader();
+                    reader.onload = (event) => { setSettings({...settings, bannerImage: event.target.result}); showToast('배너 업로드 완료', 'success'); };
+                    reader.readAsDataURL(file);
+                }
+            };
+
+            const exportSalesCSV = () => {
+                if(salesData.length === 0) return showToast('데이터가 없습니다.', 'error');
+                const csvRows = ['\uFEFF연도,월,병원명,매출액,수수료'];
+                salesData.forEach(r => csvRows.push(`${r.year},${r.month},${r.hospitalName},${r.amount},${r.commission}`));
+                const blob = new Blob([csvRows.join('\n')], { type: 'text/csv;charset=utf-8;' });
+                const link = document.createElement('a'); link.href = URL.createObjectURL(blob); link.setAttribute('download', '매출현황_백업.csv');
+                document.body.appendChild(link); link.click(); document.body.removeChild(link);
+            };
+
+            const importSalesCSV = (e) => {
+                const file = e.target.files[0];
+                if(!file) return;
+                const reader = new FileReader();
+                reader.onload = (event) => {
+                    try {
+                        const rows = event.target.result.split('\n');
+                        if(rows.length < 2) return showToast('잘못된 파일입니다.', 'error');
+                        const newData = [];
+                        for(let i=1; i<rows.length; i++) {
+                            if(!rows[i].trim()) continue;
+                            const cols = rows[i].split(',');
+                            if(cols.length >= 5) newData.push({ id: Date.now() + i, year: Number(cols[0]), month: Number(cols[1]), hospitalName: cols[2], amount: Number(cols[3]), commission: Number(cols[4] || 0) });
+                        }
+                        if(newData.length > 0) { setSalesData(p => [...newData, ...p]); showToast(`${newData.length}건 매출 복구 성공!`, 'success'); }
+                    } catch(err) { showToast('파일 읽기 오류', 'error'); }
+                };
+                reader.readAsText(file);
+                e.target.value = '';
+            };
+
+            const exportDocCSV = () => {
+                if(doctorProfiles.length === 0) return showToast('데이터가 없습니다.', 'error');
+                const csvRows = ['\uFEFF병원명,원장명,생년월일,음력여부,관심사,가족사항'];
+                doctorProfiles.forEach(r => csvRows.push(`${r.hospitalName},${r.doctorName},${r.birthDate},${r.isLunar},${r.likes},${r.family}`));
+                const blob = new Blob([csvRows.join('\n')], { type: 'text/csv;charset=utf-8;' });
+                const link = document.createElement('a'); link.href = URL.createObjectURL(blob); link.setAttribute('download', '원장님프로필_백업.csv');
+                document.body.appendChild(link); link.click(); document.body.removeChild(link);
+            };
+
+            const importDocCSV = (e) => {
+                const file = e.target.files[0];
+                if(!file) return;
+                const reader = new FileReader();
+                reader.onload = (event) => {
+                    try {
+                        const rows = event.target.result.split('\n');
+                        if(rows.length < 2) return showToast('잘못된 파일입니다.', 'error');
+                        const newData = [];
+                        for(let i=1; i<rows.length; i++) {
+                            if(!rows[i].trim()) continue;
+                            const cols = rows[i].split(',');
+                            if(cols.length >= 6) newData.push({ id: Date.now() + i, hospitalName: cols[0], doctorName: cols[1], birthDate: cols[2], isLunar: cols[3] === 'true', likes: cols[4], family: cols[5] });
+                        }
+                        if(newData.length > 0) { setDoctorProfiles(p => [...newData, ...p]); showToast(`${newData.length}건 프로필 복구 성공!`, 'success'); }
+                    } catch(err) { showToast('파일 읽기 오류', 'error'); }
+                };
+                reader.readAsText(file);
+                e.target.value = '';
+            };
+
+            if (view === 'login') {
+                return (
+                    <div className="h-full flex items-center justify-center bg-slate-900 text-white p-4 gap-8">
+                        <div className="hidden md:flex flex-col justify-center w-80 bg-slate-800/50 p-6 rounded-[2rem] border border-slate-700">
+                            <h3 className="text-emerald-400 font-black text-base mb-4 flex items-center"><i className="fas fa-lightbulb mr-2 text-yellow-400 text-xl"></i>오늘의 세일즈 팁</h3>
+                            <p className="text-slate-200 text-sm font-bold leading-relaxed break-keep">"{todayLoginQuote}"</p>
+                            <p className="text-[10px] text-slate-500 mt-4"><i className="fas fa-clock mr-1"></i>매일 자정 업데이트</p>
+                        </div>
+                        <div className="bg-slate-800 p-8 rounded-[2rem] shadow-2xl w-full max-w-sm text-center border border-slate-700 relative overflow-hidden">
+                            <h2 className="text-2xl font-black mb-6 text-emerald-400 relative z-10"><i className="fas fa-lock"></i> 보안 인증</h2>
+                            <input type="password" value={loginPin} onChange={e=>setLoginPin(e.target.value)} onKeyDown={e=>{if(e.key==='Enter' && loginPin===settings.adminPin) {setView('admin'); setLoginPin('');} else if(e.key==='Enter') {showToast('비밀번호 오류','error'); setLoginPin('');}}} placeholder="비밀번호" className="w-full p-3 rounded-xl bg-slate-700 text-center text-xl tracking-widest outline-none focus:ring-2 focus:ring-emerald-500 mb-5 font-bold relative z-10 shadow-inner" />
+                            <div className="flex gap-2 relative z-10">
+                                <button onClick={()=>{if(loginPin===settings.adminPin){setView('admin'); setLoginPin('');} else {showToast('비번 오류','error'); setLoginPin('');}}} className="flex-1 bg-emerald-600 hover:bg-emerald-500 py-3 rounded-xl text-sm font-black transition shadow">접속</button>
+                                <button onClick={()=>{setView('main'); setLoginPin('');}} className="flex-1 bg-slate-600 hover:bg-slate-500 py-3 rounded-xl text-sm font-black transition shadow">취소</button>
+                            </div>
+                        </div>
+                    </div>
+                );
+            }
+
+            return (
+                <React.Fragment>
+                    <div className="h-screen w-screen flex flex-col overflow-hidden text-base">
+                        {/* Quote Banner */}
+                        <div className="bg-emerald-600 text-white shadow-sm flex justify-center items-center py-1.5 px-4 shrink-0 relative z-20">
+                            <p className="text-[13px] font-black tracking-wide flex items-center">
+                                <i className="fas fa-quote-left text-emerald-300 mr-2 opacity-70"></i>
+                                {dailyQuote}
+                                <i className="fas fa-quote-right text-emerald-300 ml-2 opacity-70"></i>
+                            </p>
+                        </div>
+
+                        {/* Header */}
+                        <div className="bg-white border-b border-slate-200 px-6 py-3 flex items-center justify-between shrink-0 shadow-sm z-10 h-[64px]">
+                            <div className="flex items-center gap-4">
+                                {settings.logoImage ? <img src={settings.logoImage} alt="Logo" className="h-8 object-contain" /> : <h1 className="text-2xl font-black text-emerald-800 tracking-tighter">{settings.logoText || 'J PHARM.'}</h1>}
+                                <div className="flex items-center gap-1.5 bg-slate-100 px-3 py-1 rounded-full shadow-inner border border-slate-200">
+                                    <div className={`w-2 h-2 rounded-full ${isConnected ? 'bg-emerald-500' : 'bg-rose-500'} animate-pulse`}></div>
+                                    <span className={`text-[10px] font-black ${isConnected ? 'text-emerald-700' : 'text-rose-600'}`}>{isConnected ? 'ONLINE' : 'LOCAL'}</span>
+                                </div>
+                            </div>
+                            {view === 'main' ? (
+                                <button onClick={() => {setView('login'); setLoginPin('');}} className="flex items-center gap-2 text-slate-700 hover:text-emerald-800 transition px-3 py-1.5 border border-slate-200 bg-white hover:bg-emerald-50 rounded-lg shadow-sm shrink-0">
+                                    <i className="fas fa-cog text-sm"></i><span className="text-xs font-black">관리자 설정</span>
+                                </button>
+                            ) : (
+                                <button onClick={() => {setView('main'); showToast('저장 완료', 'success');}} className="flex items-center gap-2 text-white bg-slate-800 hover:bg-slate-900 transition px-4 py-2 rounded-lg shadow-sm shrink-0">
+                                    <i className="fas fa-save text-sm"></i><span className="text-xs font-black">저장 후 나가기</span>
+                                </button>
+                            )}
+                        </div>
+
+                        {}
+                        {view === 'main' && (
+                            <div className="flex-1 flex flex-col overflow-hidden relative">
+                                <div className="flex-1 flex gap-4 p-4 overflow-hidden">
+                                    {/* Left Column */}
+                                    <div className="flex-[2] flex flex-col gap-4 overflow-hidden">
+                                        {/* Summary Cards */}
+                                        <div className="bg-white rounded-[2rem] shadow-sm border border-slate-200 p-6 flex flex-col shrink-0 relative overflow-hidden">
+                                            <div className="flex items-center gap-3 mb-5 z-10">
+                                                <select value={currentDate.year} onChange={e=>setCurrentDate({...currentDate, year: Number(e.target.value)})} className="font-black text-slate-700 bg-slate-100 px-4 py-2 rounded-xl text-lg shadow-sm border border-slate-200 outline-none cursor-pointer">
+                                                    {[2024, 2025, 2026, 2027].map(y => <option key={y} value={y}>{y}년</option>)}
+                                                </select>
+                                                <select value={currentDate.month} onChange={e=>setCurrentDate({...currentDate, month: Number(e.target.value)})} className="font-black text-white bg-emerald-600 px-5 py-2 rounded-xl text-xl shadow-sm outline-none cursor-pointer">
+                                                    {[1,2,3,4,5,6,7,8,9,10,11,12].map(m => <option key={m} value={m}>{m}월 실적</option>)}
+                                                </select>
+                                            </div>
+                                            <div className="flex gap-5 z-10 w-full">
+                                                <div className="flex-1 bg-emerald-50/80 p-5 rounded-[1.5rem] border border-emerald-100 shadow-sm relative">
+                                                    <p className="text-emerald-800 text-sm mb-2 font-black flex items-center"><i className="fas fa-coins mr-2 text-emerald-500"></i> 당월 누적 매출</p>
+                                                    <h2 className="text-3xl lg:text-4xl font-black text-emerald-700 tracking-tight">{formatCurr(monthlyTotal)}</h2>
+                                                    <div className="mt-3 flex items-center gap-2">
+                                                        <div className="flex-1 bg-white h-3 rounded-full overflow-hidden shadow-inner border border-emerald-100"><div className="bg-emerald-500 h-full transition-all duration-1000" style={{width: `${monthlyAchieve}%`}}></div></div>
+                                                        <span className="text-xs font-black text-emerald-700 bg-white px-2 py-1 rounded-md shadow-sm whitespace-nowrap">목표 {formatCurr(currentMonthTarget)} ({monthlyAchieve}%)</span>
+                                                    </div>
+                                                </div>
+                                                <div className="flex-1 bg-blue-50/80 p-5 rounded-[1.5rem] border border-blue-100 shadow-sm relative">
+                                                    <p className="text-blue-800 text-sm mb-2 font-black flex items-center"><i className="fas fa-chart-line mr-2 text-blue-500"></i> 연간 누적 매출</p>
+                                                    <h2 className="text-3xl lg:text-4xl font-black text-blue-700 tracking-tight">{formatCurr(ytdTotal)}</h2>
+                                                    <div className="mt-3 flex items-center gap-2">
+                                                        <div className="flex-1 bg-white h-3 rounded-full overflow-hidden shadow-inner border border-blue-100"><div className="bg-blue-500 h-full transition-all duration-1000" style={{width: `${yearlyAchieve}%`}}></div></div>
+                                                        <span className="text-xs font-black text-blue-700 bg-white px-2 py-1 rounded-md shadow-sm whitespace-nowrap">목표 {formatCurr(currentYearTarget)} ({yearlyAchieve}%)</span>
+                                                    </div>
+                                                </div>
+                                                <div className="flex-1 bg-purple-50/80 p-5 rounded-[1.5rem] border border-purple-100 shadow-sm flex flex-col justify-between">
+                                                    <div>
+                                                        <p className="text-purple-800 text-sm mb-2 font-black flex items-center"><i className="fas fa-wallet mr-2 text-purple-500"></i> 당월 순수익 <span className="text-[10px] ml-1">(매출-수수료)</span></p>
+                                                        <h2 className="text-3xl lg:text-4xl font-black text-purple-700 tracking-tight">{formatCurr(monthlyNetIncome)}</h2>
+                                                    </div>
+                                                    <div className="mt-3 flex items-center justify-between bg-white px-3 py-2 rounded-xl border border-purple-100 shadow-sm">
+                                                        <span className="text-xs font-bold text-slate-500">연간 누적 순수익</span>
+                                                        <span className="text-sm font-black text-purple-700">{formatCurr(ytdNetIncome)}</span>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        {/* Bottom Half of Left Column (Ranking, Books, D-Day) */}
+                                        <div className="flex-1 flex gap-4 overflow-hidden min-h-0">
+                                            {/* Ranking */}
+                                            <div className="flex-[1.2] bg-white rounded-3xl shadow-sm border border-slate-200 p-6 flex flex-col min-h-0">
+                                                <div className="flex items-center justify-between mb-5 border-b border-slate-100 pb-3 shrink-0">
+                                                    <h3 className="font-black text-slate-800 text-lg flex items-center"><i className="fas fa-medal text-yellow-500 mr-2 text-xl"></i>병원별 실적 랭킹 <span className="text-xs font-bold text-slate-400 ml-2">(클릭 상세)</span></h3>
+                                                    <div className="flex items-center gap-1.5">
+                                                        <div className="flex bg-slate-100 rounded-full p-1 shadow-inner">
+                                                            <button onClick={()=>{setChartSort('current'); setRankPage(1); setChartRendered(false); setTimeout(()=>setChartRendered(true), 100);}} className={`text-[10px] font-black px-2 py-1 rounded-full transition ${chartSort==='current'?'bg-emerald-500 text-white shadow':'text-slate-500'}`}>당월</button>
+                                                            <button onClick={()=>{setChartSort('accumulated'); setRankPage(1); setChartRendered(false); setTimeout(()=>setChartRendered(true), 100);}} className={`text-[10px] font-black px-2 py-1 rounded-full transition ${chartSort==='accumulated'?'bg-blue-500 text-white shadow':'text-slate-500'}`}>누적</button>
+                                                        </div>
+                                                        <select className="border border-indigo-200 bg-indigo-50 text-indigo-800 font-bold rounded-lg px-2 py-1 text-[10px] outline-none cursor-pointer w-24" value="" onChange={e => openHospModal(e.target.value)}>
+                                                            <option value="" disabled>병원선택</option>
+                                                            {hospitalMaster.sort().map(h => <option key={h} value={h}>{h}</option>)}
+                                                        </select>
+                                                    </div>
+                                                </div>
+                                                <div className="flex-1 flex flex-col justify-between overflow-hidden pr-2">
+                                                    {currentRankData.length === 0 ? <div className="h-full flex items-center justify-center text-slate-400 font-bold text-base">데이터 없음</div> : 
+                                                        currentRankData.map((item) => {
+                                                            const percent = (item[chartSort] / maxAmount) * 100;
+                                                            const barColor = chartSort === 'current' ? 'bg-emerald-500' : 'bg-blue-500';
+                                                            const globalIdx = displayedHospitals.findIndex(h => h.id === item.id);
+                                                            return (
+                                                                <div key={item.id} onClick={() => openHospModal(item.hospitalName)} className="relative group cursor-pointer hover:bg-slate-50 p-2 rounded-xl transition border border-transparent hover:border-slate-200">
+                                                                    <div className="flex justify-between items-end mb-1">
+                                                                        <span className="text-slate-700 font-black text-[15px] group-hover:text-emerald-700 transition">{globalIdx + 1}. {item.hospitalName}</span>
+                                                                        <span className="text-slate-900 font-black text-base">{formatCurr(item[chartSort])}</span>
+                                                                    </div>
+                                                                    <div className="w-full bg-slate-100 rounded-full h-2.5 overflow-hidden shadow-inner">
+                                                                        <div className={`h-full rounded-full chart-bar ${barColor} opacity-90 group-hover:opacity-100`} style={{ width: chartRendered ? `${percent}%` : '0%' }}></div>
+                                                                    </div>
+                                                                </div>
+                                                            );
+                                                        })
+                                                    }
+                                                </div>
+                                                {totalRankPages > 1 && (
+                                                    <div className="pt-2 border-t border-slate-100 mt-2 shrink-0 flex justify-center items-center gap-4 text-sm font-black text-slate-500">
+                                                        <button onClick={()=>setRankPage(p=>Math.max(1, p-1))} className="bg-slate-100 px-4 py-1 rounded-lg hover:bg-slate-200 text-slate-700 shadow-sm transition">&lt;</button>
+                                                        <span>{rankPage} / {totalRankPages}</span>
+                                                        <button onClick={()=>setRankPage(p=>Math.min(totalRankPages, p+1))} className="bg-slate-100 px-4 py-1 rounded-lg hover:bg-slate-200 text-slate-700 shadow-sm transition">&gt;</button>
+                                                    </div>
+                                                )}
+                                            </div>
+
+                                            {/* Books */}
+                                            <div className="flex-1 bg-white rounded-3xl border border-slate-200 p-6 shadow-sm flex flex-col min-h-0">
+                                                <h3 className="font-black text-slate-800 text-lg mb-5 border-b border-slate-100 pb-3 flex items-center shrink-0"><i className="fas fa-book-open text-amber-500 mr-2 text-xl"></i>금주의 추천도서</h3>
+                                                <div className="flex-1 flex flex-col justify-between overflow-hidden">
+                                                    {weeklyBooks.map((b, i) => (
+                                                        <div key={i} onClick={()=>setSelectedBook(b)} className="bg-slate-50 p-3 rounded-xl border border-slate-100 cursor-pointer hover:border-amber-300 hover:shadow-sm transition flex justify-between items-center group">
+                                                            <div className="flex flex-col truncate pr-2">
+                                                                <span className="text-[15px] font-black text-slate-800 truncate group-hover:text-amber-700 mb-0.5">{b.title}</span>
+                                                                <span className="text-[12px] text-slate-500 font-bold truncate">{b.author}</span>
+                                                            </div>
+                                                            <span className="text-[10px] font-black text-slate-400 bg-white border px-2 py-1 rounded shadow-sm shrink-0 group-hover:bg-amber-50 group-hover:text-amber-600 transition">클릭👆</span>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            </div>
+
+                                            {/* Birthdays (Moved next to Books) */}
+                                            <div className="flex-1 bg-gradient-to-br from-indigo-600 to-purple-800 text-white rounded-3xl shadow-lg p-6 flex flex-col min-h-0 relative">
+                                                <div className="flex justify-between items-center border-b border-white/20 pb-3 mb-4 shrink-0">
+                                                    <h3 className="font-black text-lg flex items-center"><i className="fas fa-birthday-cake text-pink-300 mr-2 text-xl"></i>원장님 D-Day</h3>
+                                                    {totalBdayPages > 1 && (
+                                                        <div className="flex gap-1 text-xs">
+                                                            <button onClick={()=>setBdayPage(p=>Math.max(1, p-1))} className="bg-white/20 px-2 py-1.5 rounded hover:bg-white/30">&lt;</button>
+                                                            <span className="font-bold px-2 py-1.5">{bdayPage}/{totalBdayPages}</span>
+                                                            <button onClick={()=>setBdayPage(p=>Math.min(totalBdayPages, p+1))} className="bg-white/20 px-2 py-1.5 rounded hover:bg-white/30">&gt;</button>
+                                                        </div>
+                                                    )}
+                                                </div>
+                                                {/* Optimization: flex-1 without scrolling, reduced spacing to fit exactly 5 items securely */}
+                                                <div className="flex-1 flex flex-col justify-start space-y-1.5 overflow-hidden">
+                                                    {upcomingBirthdays.slice((bdayPage-1)*5, bdayPage*5).map(p => (
+                                                        <div key={p.id} onClick={() => setSelectedDocDetail(p)} className="bg-white/10 py-2 px-3 rounded-xl border border-white/20 cursor-pointer hover:bg-white/20 transition flex justify-between items-center group">
+                                                            <div className="flex flex-col truncate pr-2">
+                                                                <span className="font-black text-[15px] group-hover:text-pink-200 truncate leading-tight">{p.hospitalName}</span>
+                                                                <div className="flex items-baseline gap-1 mt-0.5 truncate">
+                                                                    <span className="text-[13px] font-bold text-indigo-100">{p.doctorName}</span>
+                                                                    <span className="text-[13px] font-black text-indigo-200">{p.calcSolarDate}</span>
+                                                                    <span className="text-[10px] font-bold text-pink-200/80">({p.isLunar?'음':'양'}) {p.isLunar && `(올해 ${p.calcSolarDate})`}</span>
+                                                                </div>
+                                                            </div>
+                                                            <div className="flex items-center gap-2 shrink-0">
+                                                                <span className="text-[10px] font-black text-indigo-200 bg-white/10 px-1.5 py-1 rounded shadow-sm group-hover:bg-white/20 transition">클릭👆</span>
+                                                                <span className="text-[13px] font-black bg-pink-500 px-3 py-1.5 rounded-lg shadow whitespace-nowrap">D-{p.dday===0?'DAY':p.dday}</span>
+                                                            </div>
+                                                        </div>
+                                                    ))}
+                                                    {upcomingBirthdays.length===0 && <div className="text-sm text-center opacity-70 font-bold py-4">등록된 생일 없음</div>}
+                                                </div>
+                                            </div>
+
+                                        </div>
+                                    </div>
+
+                                    {/* Right Column (Widgets) */}
+                                    <div className="w-[320px] lg:w-[380px] flex flex-col gap-4 overflow-hidden shrink-0">
+                                        
+                                        {/* TAX CHECK */}
+                                        <div onClick={()=>setShowTaxModal(true)} className="bg-slate-800 hover:bg-slate-900 transition cursor-pointer text-white rounded-[2rem] p-6 shadow-lg flex flex-col shrink-0 border border-slate-700 group">
+                                            <div className="flex items-center justify-between border-b border-slate-600 pb-4 mb-4">
+                                                <div className="flex items-center gap-3">
+                                                    <div className="bg-emerald-500/20 w-12 h-12 rounded-xl flex items-center justify-center text-emerald-400 text-xl"><i className="fas fa-calculator"></i></div>
+                                                    <span className="font-black text-xl tracking-widest">TAX CHECK</span>
+                                                </div>
+                                                <span className="text-xs font-black text-slate-400 bg-white/10 px-2 py-1 rounded shadow-sm shrink-0 group-hover:bg-white/20 transition">클릭👆</span>
+                                            </div>
+                                            <div className="flex justify-between items-center bg-slate-700/50 px-5 py-3 rounded-2xl mb-3 text-base">
+                                                <span className="text-slate-300 font-bold">부가가치세</span>
+                                                <div className="flex items-center gap-3">
+                                                    <span className="text-xs font-normal text-slate-400">{taxEstimate.nextVatDateStr}</span>
+                                                    <span className="text-emerald-400 bg-emerald-900/50 px-2 py-1 rounded text-sm font-black">D-{taxEstimate.diffVat}</span>
+                                                </div>
+                                            </div>
+                                            <div className="flex justify-between items-center bg-slate-700/50 px-5 py-3 rounded-2xl text-base">
+                                                <span className="text-slate-300 font-bold">종합소득세</span>
+                                                <div className="flex items-center gap-3">
+                                                    <span className="text-xs font-normal text-slate-400">{taxEstimate.incDateStr}</span>
+                                                    <span className="text-amber-400 bg-amber-900/50 px-2 py-1 rounded text-sm font-black">D-{taxEstimate.diffInc}</span>
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        {/* Weather - Restored Compact Size */}
+                                        {weatherData && (
+                                            <div className="bg-white rounded-3xl shadow-sm border border-slate-200 p-5 shrink-0 flex flex-col">
+                                                <h3 className="font-black text-slate-800 mb-3 flex items-center text-sm border-b border-slate-100 pb-2">
+                                                    <i className="fas fa-cloud-sun text-sky-500 mr-2 text-lg"></i> 지역별 날씨 현황 <span className="text-[10px] text-slate-400 ml-1 font-bold">(오늘/내일)</span>
+                                                </h3>
+                                                <div className="flex flex-col gap-3">
+                                                    <div className="flex justify-between items-center bg-sky-50/50 p-2.5 rounded-xl border border-sky-100">
+                                                        <span className="font-black text-sky-800 bg-white px-2.5 py-1 rounded shadow-sm text-sm shrink-0 w-[60px] text-center">원주시</span>
+                                                        <div className="flex items-center gap-3 text-xs font-black truncate text-slate-700">
+                                                            <span className="flex items-center">오늘 {getWeatherIcon(weatherData.wonju.weathercode[0])} <span className="text-rose-500 ml-1">{fmtTemp(weatherData.wonju.temperature_2m_max[0])}°</span> / <span className="text-blue-500">{fmtTemp(weatherData.wonju.temperature_2m_min[0])}°</span></span>
+                                                            <span className="text-slate-300">|</span>
+                                                            <span className="flex items-center">내일 {getWeatherIcon(weatherData.wonju.weathercode[1])} <span className="text-rose-500 ml-1">{fmtTemp(weatherData.wonju.temperature_2m_max[1])}°</span> / <span className="text-blue-500">{fmtTemp(weatherData.wonju.temperature_2m_min[1])}°</span></span>
+                                                        </div>
+                                                    </div>
+                                                    <div className="flex justify-between items-center bg-sky-50/50 p-2.5 rounded-xl border border-sky-100">
+                                                        <span className="font-black text-sky-800 bg-white px-2.5 py-1 rounded shadow-sm text-sm shrink-0 w-[60px] text-center">제천시</span>
+                                                        <div className="flex items-center gap-3 text-xs font-black truncate text-slate-700">
+                                                            <span className="flex items-center">오늘 {getWeatherIcon(weatherData.jecheon.weathercode[0])} <span className="text-rose-500 ml-1">{fmtTemp(weatherData.jecheon.temperature_2m_max[0])}°</span> / <span className="text-blue-500">{fmtTemp(weatherData.jecheon.temperature_2m_min[0])}°</span></span>
+                                                            <span className="text-slate-300">|</span>
+                                                            <span className="flex items-center">내일 {getWeatherIcon(weatherData.jecheon.weathercode[1])} <span className="text-rose-500 ml-1">{fmtTemp(weatherData.jecheon.temperature_2m_max[1])}°</span> / <span className="text-blue-500">{fmtTemp(weatherData.jecheon.temperature_2m_min[1])}°</span></span>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        )}
+
+                                        {/* Dynamic Picture Frame */}
+                                        <div className="flex-1 bg-white rounded-3xl shadow-sm border border-slate-200 overflow-hidden relative flex flex-col justify-center items-center bg-slate-50 min-h-[150px]">
+                                            {settings.bannerImage ? (
+                                                <img src={settings.bannerImage} alt="Main Banner" className="absolute inset-0 w-full h-full object-cover" />
+                                            ) : (
+                                                <div className="text-center p-6 opacity-40">
+                                                    <i className="fas fa-image text-4xl text-slate-400 mb-2"></i>
+                                                    <p className="text-xs font-bold text-slate-500">관리자 모드(환경 및 목표 설정)에서<br/>메인 배너(사진)를 등록하면<br/>여기에 액자처럼 표시됩니다.</p>
+                                                </div>
+                                            )}
+                                        </div>
+
+                                    </div>
+                                </div>
+                                {/* Footer Notice */}
+                                <div className="bg-slate-800 text-slate-300 text-sm font-bold px-6 py-2.5 shrink-0 w-full truncate whitespace-nowrap text-center">
+                                    <i className="fas fa-info-circle text-amber-400 mr-2"></i> NOTICE: 브라우저 캐시 삭제 시 데이터가 초기화됩니다. 관리자 모드에서 'CSV 백업' 기능을 주기적으로 활용하세요.
+                                </div>
+                            </div>
+                        )}
+
+                        {}
+                        {view === 'admin' && (
+                            <div className="flex-1 flex flex-col p-6 bg-indigo-50/20 overflow-hidden">
+                                <div className="flex justify-between items-center border-b border-slate-200 pb-4 mb-5 shrink-0">
+                                    <div className="flex items-center gap-4">
+                                        <h2 className="text-2xl font-black text-emerald-800"><i className="fas fa-cog mr-2"></i> 관리자 설정</h2>
+                                        <div className="flex bg-slate-200 p-1.5 rounded-xl shadow-inner">
+                                            <button onClick={()=>setAdminTab('data')} className={`px-5 py-2 rounded-lg text-sm font-black transition ${adminTab === 'data' ? 'bg-white text-emerald-700 shadow' : 'text-slate-500 hover:text-slate-700'}`}>실적 및 프로필 관리</button>
+                                            <button onClick={()=>setAdminTab('setting')} className={`px-5 py-2 rounded-lg text-sm font-black transition ${adminTab === 'setting' ? 'bg-white text-emerald-700 shadow' : 'text-slate-500 hover:text-slate-700'}`}>환경 및 목표 설정</button>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div className="flex-1 overflow-hidden min-h-0">
+                                    {adminTab === 'data' && (
+                                        <div className="grid grid-cols-2 gap-6 h-full">
+                                            {/* 좌측: 병원 매출 등록 */}
+                                            <div className="bg-white rounded-2xl border border-slate-200 shadow-sm flex flex-col overflow-hidden">
+                                                <div className="p-4 border-b border-slate-100 bg-slate-50 shrink-0 flex justify-between items-center">
+                                                    <h3 className="font-black text-slate-800 text-lg"><i className="fas fa-won-sign text-emerald-500 mr-2"></i>병원 매출 등록</h3>
+                                                    <div className="flex gap-2">
+                                                        <select value={adminDate.year} onChange={e=>setAdminDate({...adminDate, year: Number(e.target.value)})} className="border rounded-lg text-sm p-1.5 font-bold outline-none"><option value="2026">2026년</option><option value="2027">2027년</option></select>
+                                                        <select value={adminDate.month} onChange={e=>setAdminDate({...adminDate, month: Number(e.target.value)})} className="border rounded-lg text-sm p-1.5 font-bold bg-emerald-50 text-emerald-700 outline-none">{[1,2,3,4,5,6,7,8,9,10,11,12].map(m=><option key={m} value={m}>{m}월</option>)}</select>
+                                                    </div>
+                                                </div>
+                                                <div className="p-3 flex flex-col gap-2 shrink-0 border-b border-slate-100">
+                                                    <input type="text" placeholder="병원명 선택/입력" list="hosp-list" value={manualHosp} onChange={e=>setManualHosp(e.target.value)} className="w-full border p-2.5 rounded-xl text-sm font-bold outline-none bg-slate-50 focus:bg-white" />
+                                                    <datalist id="hosp-list">{hospitalMaster.sort().map(h => <option key={h} value={h} />)}</datalist>
+                                                    <div className="flex gap-3">
+                                                        <input type="text" placeholder="매출액 입력 (원)" value={manualAmt} onChange={handleManualAmtChange} className="flex-[2] border p-2.5 rounded-xl text-sm font-black outline-none" />
+                                                        <div className="flex-1 flex bg-slate-100 p-1 rounded-xl">
+                                                            <button onClick={()=>{setCommType('fixed'); setManualComm('');}} className={`flex-1 text-[13px] font-black rounded-lg transition ${commType==='fixed'?'bg-rose-500 text-white shadow':'text-slate-500'}`}>정액제</button>
+                                                            <button onClick={()=>{setCommType('percent'); setManualComm('');}} className={`flex-1 text-[13px] font-black rounded-lg transition ${commType==='percent'?'bg-rose-500 text-white shadow':'text-slate-500'}`}>정률제</button>
+                                                        </div>
+                                                    </div>
+                                                    <div className="flex gap-3">
+                                                        <input type="text" placeholder={commType==='percent'?"수수료율 입력 (예: 15)":"수수료액 입력 (예: 1,000,000)"} value={manualComm} onChange={handleManualCommChange} className="flex-[3] border border-rose-200 bg-rose-50 text-rose-700 p-2.5 rounded-xl text-sm font-black outline-none" />
+                                                        <button onClick={handleManualSubmit} className="flex-1 bg-emerald-600 text-white rounded-xl font-black text-sm shadow hover:bg-emerald-700">등록</button>
+                                                    </div>
+                                                </div>
+                                                <div className="p-2 px-3 bg-slate-100 shrink-0 flex justify-end gap-2 border-b border-slate-200">
+                                                    <label className="cursor-pointer bg-slate-800 text-white px-3 py-1.5 rounded-lg text-xs font-black shadow hover:bg-slate-700 transition flex items-center">
+                                                        <i className="fas fa-upload mr-2"></i> CSV 복구 <input type="file" accept=".csv" className="hidden" onChange={importSalesCSV} />
+                                                    </label>
+                                                    <button onClick={exportSalesCSV} className="text-xs font-black text-white bg-blue-600 px-3 py-1.5 rounded-lg shadow hover:bg-blue-700 transition flex items-center"><i className="fas fa-download mr-2"></i> CSV 백업</button>
+                                                </div>
+                                                <div className="flex-1 overflow-hidden p-3 flex flex-col">
+                                                    {filteredAdminSales.length === 0 ? <div className="flex-1 flex items-center justify-center text-sm font-bold text-slate-400">등록된 데이터가 없습니다.</div> : 
+                                                    <div className="flex-1 overflow-hidden border rounded-xl border-slate-200">
+                                                        <table className="w-full text-base text-left table-fixed h-full">
+                                                            <colgroup><col className="w-1/12"/><col className="w-4/12"/><col className="w-3/12"/><col className="w-2/12"/><col className="w-2/12"/></colgroup>
+                                                            <thead className="text-slate-500 bg-slate-50 font-black shadow-sm border-b">
+                                                                <tr>
+                                                                    <th className="py-2.5 px-3 text-center whitespace-nowrap align-middle">No.</th>
+                                                                    <th className="py-2.5 px-3 whitespace-nowrap align-middle">병원명</th>
+                                                                    <th className="py-2.5 px-3 text-center whitespace-nowrap align-middle">매출액</th>
+                                                                    <th className="py-2.5 px-3 text-center text-rose-500 whitespace-nowrap align-middle">수수료</th>
+                                                                    <th className="py-2.5 px-3 text-center whitespace-nowrap align-middle">관리</th>
+                                                                </tr>
+                                                            </thead>
+                                                            <tbody className="divide-y divide-slate-100">
+                                                                {currentAdminSalesData.map((item, idx) => (
+                                                                    <tr key={item.id} className="hover:bg-slate-50 h-[20%]">
+                                                                        <td className="py-1 px-3 text-center text-slate-400 font-bold whitespace-nowrap align-middle">{(adminSalesPage-1)*5 + idx + 1}</td>
+                                                                        <td className="py-1 px-3 font-black text-slate-700 truncate whitespace-nowrap align-middle">{item.hospitalName}</td>
+                                                                        {editingSalesId === item.id ? (
+                                                                            <React.Fragment>
+                                                                                <td className="py-1 px-2 align-middle"><input type="text" value={editSalesForm.amount} onChange={e=>{const r=e.target.value.replace(/[^0-9]/g,""); setEditSalesForm({...editSalesForm, amount: r?new Intl.NumberFormat('ko-KR').format(Number(r)):''})}} className="w-full border p-2 rounded text-center font-bold text-sm" /></td>
+                                                                                <td className="py-1 px-2 align-middle"><input type="text" value={editSalesForm.commission} onChange={e=>{const r=e.target.value.replace(/[^0-9]/g,""); setEditSalesForm({...editSalesForm, commission: r?new Intl.NumberFormat('ko-KR').format(Number(r)):''})}} className="w-full border border-rose-200 p-2 rounded text-center font-bold text-sm text-rose-500" /></td>
+                                                                                <td className="py-1 px-2 text-center align-middle whitespace-nowrap"><div className="flex gap-1 justify-center"><button onClick={saveSalesEdit} className="bg-emerald-500 text-white px-2 py-1.5 rounded-lg font-black text-xs shadow-sm">V</button><button onClick={()=>setEditingSalesId(null)} className="bg-slate-400 text-white px-2 py-1.5 rounded-lg font-black text-xs shadow-sm">X</button></div></td>
+                                                                            </React.Fragment>
+                                                                        ) : (
+                                                                            <React.Fragment>
+                                                                                <td className="py-1 px-3 font-black text-slate-800 text-center whitespace-nowrap align-middle">{formatCurr(item.amount)}</td>
+                                                                                <td className="py-1 px-3 font-bold text-rose-500 text-center whitespace-nowrap align-middle">{formatCurr(item.commission)}</td>
+                                                                                <td className="py-1 px-3 text-center align-middle whitespace-nowrap">
+                                                                                    <div className="flex gap-1 justify-center">
+                                                                                        <button onClick={()=>{setEditingSalesId(item.id); setEditSalesForm({amount: new Intl.NumberFormat('ko-KR').format(item.amount), commission: new Intl.NumberFormat('ko-KR').format(item.commission)});}} className="bg-blue-50 hover:bg-blue-100 text-blue-600 px-3 py-1.5 rounded-lg text-xs font-black transition border border-blue-100 shadow-sm">수정</button>
+                                                                                        <button onClick={()=>{if(window.confirm('삭제하시겠습니까?')){setSalesData(prev=>prev.filter(i=>i.id!==item.id)); showToast('삭제됨','success');}}} className="bg-rose-50 hover:bg-rose-100 text-rose-600 px-3 py-1.5 rounded-lg text-xs font-black transition border border-rose-100 shadow-sm">삭제</button>
+                                                                                    </div>
+                                                                                </td>
+                                                                            </React.Fragment>
+                                                                        )}
+                                                                    </tr>
+                                                                ))}
+                                                            </tbody>
+                                                        </table>
+                                                    </div>}
+                                                </div>
+                                                {totalAdminSalesPages > 1 && <div className="p-4 border-t flex justify-center gap-4 items-center bg-slate-50 shrink-0"><button onClick={()=>setAdminSalesPage(p=>Math.max(1, p-1))} className="text-sm font-bold px-4 py-1.5 bg-white border rounded-lg shadow-sm hover:bg-slate-100">&lt;</button><span className="text-base font-black text-slate-700">{adminSalesPage} / {totalAdminSalesPages}</span><button onClick={()=>setAdminSalesPage(p=>Math.min(totalAdminSalesPages, p+1))} className="text-sm font-bold px-4 py-1.5 bg-white border rounded-lg shadow-sm hover:bg-slate-100">&gt;</button></div>}
+                                            </div>
+
+                                            {/* 우측: 원장님 프로필 관리 */}
+                                            <div className="bg-white rounded-2xl border border-slate-200 shadow-sm flex flex-col overflow-hidden">
+                                                <div className="p-4 border-b border-slate-100 bg-slate-50 shrink-0 flex justify-between items-center">
+                                                    <h3 className="font-black text-slate-800 text-lg"><i className="fas fa-user-md text-indigo-500 mr-2"></i>원장님 프로필 관리</h3>
+                                                </div>
+                                                <div className="p-3 flex flex-col gap-2 shrink-0 border-b border-slate-100">
+                                                    <div className="flex gap-3">
+                                                        <input type="text" placeholder="병원명 선택/입력" list="hosp-list" value={newDoc.hospitalName} onChange={e=>setNewDoc({...newDoc, hospitalName: e.target.value})} className="flex-[2] border p-2.5 rounded-xl text-sm font-bold outline-none bg-slate-50 focus:bg-white" />
+                                                        <input type="text" placeholder="원장명" value={newDoc.doctorName} onChange={e=>setNewDoc({...newDoc, doctorName: e.target.value})} className="flex-1 border p-2.5 rounded-xl text-sm font-bold outline-none" />
+                                                    </div>
+                                                    <div className="flex gap-3 items-center">
+                                                        <div className="flex-[1.5] border border-slate-200 p-1 rounded-xl bg-slate-50 flex items-center relative group">
+                                                            <input type="date" value={newDoc.birthDate} onChange={e=>setNewDoc({...newDoc, birthDate: e.target.value})} className="flex-1 text-sm font-bold p-1 outline-none bg-transparent" />
+                                                            <div className="absolute -top-7 left-1/2 transform -translate-x-1/2 bg-slate-800 text-white text-[10px] px-2 py-1 rounded opacity-0 group-hover:opacity-100 transition whitespace-nowrap pointer-events-none">연도-월-일 (직접 입력 가능)</div>
+                                                            <div className="flex gap-1 border-l pl-1.5">
+                                                                <button onClick={()=>setNewDoc({...newDoc, isLunar:false})} className={`px-2 py-1 rounded text-xs font-black transition ${!newDoc.isLunar?'bg-indigo-500 text-white shadow':'bg-slate-200 text-slate-500'}`}>양력</button>
+                                                                <button onClick={()=>setNewDoc({...newDoc, isLunar:true})} className={`px-2 py-1 rounded text-xs font-black transition ${newDoc.isLunar?'bg-indigo-500 text-white shadow':'bg-slate-200 text-slate-500'}`}>음력</button>
+                                                            </div>
+                                                        </div>
+                                                        <input type="text" placeholder="관심사" value={newDoc.likes} onChange={e=>setNewDoc({...newDoc, likes: e.target.value})} className="flex-1 border p-2.5 rounded-xl text-sm outline-none font-bold" />
+                                                        <input type="text" placeholder="가족사항" value={newDoc.family} onChange={e=>setNewDoc({...newDoc, family: e.target.value})} className="flex-1 border p-2.5 rounded-xl text-sm outline-none font-bold" />
+                                                    </div>
+                                                    <button onClick={()=>{if(!newDoc.hospitalName||!newDoc.doctorName) return; setDoctorProfiles(p=>[{id:Date.now(),...newDoc},...p]); setNewDoc({hospitalName:'', doctorName:'', birthDate:'', isLunar:false, likes:'', family:''});}} className="w-full bg-indigo-600 text-white p-2.5 rounded-xl font-black text-sm shadow hover:bg-indigo-700">신규 프로필 추가</button>
+                                                </div>
+                                                <div className="p-2 px-3 bg-slate-100 shrink-0 flex justify-end gap-2 border-b border-slate-200">
+                                                    <label className="cursor-pointer bg-slate-800 text-white px-3 py-1.5 rounded-lg text-xs font-black shadow hover:bg-slate-700 transition flex items-center">
+                                                        <i className="fas fa-upload mr-2"></i> CSV 복구 <input type="file" accept=".csv" className="hidden" onChange={importDocCSV} />
+                                                    </label>
+                                                    <button onClick={exportDocCSV} className="text-xs font-black text-white bg-blue-600 px-3 py-1.5 rounded-lg shadow hover:bg-blue-700 transition flex items-center"><i className="fas fa-download mr-2"></i> CSV 백업</button>
+                                                </div>
+                                                
+                                                {/* Optimization: No vertical scroll, table fixed, padding reduced */}
+                                                <div className="flex-1 overflow-hidden p-3 flex flex-col">
+                                                    {doctorProfiles.length === 0 ? <div className="flex-1 flex items-center justify-center text-sm font-bold text-slate-400">등록된 데이터가 없습니다.</div> : 
+                                                    <div className="flex-1 overflow-hidden border rounded-xl border-slate-200">
+                                                        <table className="w-full text-base text-left table-fixed h-full">
+                                                            <colgroup><col className="w-1/12"/><col className="w-3/12"/><col className="w-2/12"/><col className="w-2/12"/><col className="w-2/12"/><col className="w-2/12"/></colgroup>
+                                                            <thead className="text-slate-500 bg-slate-50 font-black shadow-sm border-b">
+                                                                <tr>
+                                                                    <th className="py-2 px-3 text-center whitespace-nowrap align-middle">No.</th>
+                                                                    <th className="py-2 px-3 whitespace-nowrap align-middle">병원/원장</th>
+                                                                    <th className="py-2 px-3 text-center whitespace-nowrap align-middle">생일</th>
+                                                                    <th className="py-2 px-3 text-center text-indigo-600 whitespace-nowrap align-middle">관심사</th>
+                                                                    <th className="py-2 px-3 text-center text-teal-600 whitespace-nowrap align-middle">가족사항</th>
+                                                                    <th className="py-2 px-3 text-center whitespace-nowrap align-middle">관리</th>
+                                                                </tr>
+                                                            </thead>
+                                                            <tbody className="divide-y divide-slate-100">
+                                                                {currentAdminDocData.map((p, idx) => (
+                                                                    <tr key={p.id} className="hover:bg-slate-50 h-[20%]">
+                                                                        <td className="py-1 px-3 text-center text-slate-400 font-bold whitespace-nowrap align-middle">{(adminDocPage-1)*5 + idx + 1}</td>
+                                                                        {editingDocId === p.id ? (
+                                                                            <React.Fragment>
+                                                                                <td className="py-1 px-2 align-middle">
+                                                                                    <div className="flex flex-col gap-1">
+                                                                                        <input type="text" value={editDocForm.hospitalName} onChange={e=>setEditDocForm({...editDocForm, hospitalName:e.target.value})} className="w-full border p-1 rounded font-bold text-xs" />
+                                                                                        <input type="text" value={editDocForm.doctorName} onChange={e=>setEditDocForm({...editDocForm, doctorName:e.target.value})} className="w-full border p-1 rounded font-bold text-xs" />
+                                                                                    </div>
+                                                                                </td>
+                                                                                <td className="py-1 px-2 align-middle">
+                                                                                    <input type="date" value={editDocForm.birthDate} onChange={e=>setEditDocForm({...editDocForm, birthDate:e.target.value})} className="w-full border p-1 rounded text-xs mb-1" />
+                                                                                    <div className="flex gap-1 justify-center">
+                                                                                        <button onClick={()=>setEditDocForm({...editDocForm, isLunar:false})} className={`px-2 py-0.5 rounded text-[10px] font-black transition ${!editDocForm.isLunar?'bg-indigo-500 text-white':'bg-slate-200 text-slate-500'}`}>양</button>
+                                                                                        <button onClick={()=>setEditDocForm({...editDocForm, isLunar:true})} className={`px-2 py-0.5 rounded text-[10px] font-black transition ${editDocForm.isLunar?'bg-indigo-500 text-white':'bg-slate-200 text-slate-500'}`}>음</button>
+                                                                                    </div>
+                                                                                </td>
+                                                                                <td className="py-1 px-2 align-middle"><input type="text" value={editDocForm.likes} onChange={e=>setEditDocForm({...editDocForm, likes:e.target.value})} className="w-full border p-1 rounded text-xs font-bold text-indigo-600 text-center" /></td>
+                                                                                <td className="py-1 px-2 align-middle"><input type="text" value={editDocForm.family} onChange={e=>setEditDocForm({...editDocForm, family:e.target.value})} className="w-full border p-1 rounded text-xs font-bold text-teal-600 text-center" /></td>
+                                                                                <td className="py-1 px-2 text-center align-middle whitespace-nowrap">
+                                                                                    <div className="flex gap-1 justify-center">
+                                                                                        <button onClick={saveDocEdit} className="bg-emerald-500 text-white px-2 py-1.5 rounded-lg font-black text-xs shadow-sm">V</button>
+                                                                                        <button onClick={()=>setEditingDocId(null)} className="bg-slate-400 text-white px-2 py-1.5 rounded-lg font-black text-xs shadow-sm">X</button>
+                                                                                    </div>
+                                                                                </td>
+                                                                            </React.Fragment>
+                                                                        ) : (
+                                                                            <React.Fragment>
+                                                                                <td className="py-1 px-3 align-middle truncate">
+                                                                                    <div className="font-black text-slate-800 truncate">{p.hospitalName}</div>
+                                                                                    <div className="font-bold text-slate-500 text-sm truncate">{p.doctorName}</div>
+                                                                                </td>
+                                                                                <td className="py-1 px-3 text-slate-800 font-black text-center whitespace-nowrap align-middle text-[15px]">
+                                                                                    {p.birthDate} <span className="text-[11px] text-slate-500 font-bold ml-0.5">{p.isLunar?'(음)':'(양)'}</span>
+                                                                                </td>
+                                                                                <td className="py-1 px-3 text-sm font-bold text-center text-indigo-600 align-middle truncate">{p.likes||'-'}</td>
+                                                                                <td className="py-1 px-3 text-sm font-bold text-center text-teal-600 align-middle truncate">{p.family||'-'}</td>
+                                                                                <td className="py-1 px-3 text-center align-middle whitespace-nowrap">
+                                                                                    <div className="flex gap-1 justify-center">
+                                                                                        <button onClick={()=>{setEditingDocId(p.id); setEditDocForm({...p});}} className="bg-blue-50 hover:bg-blue-100 text-blue-600 px-3 py-1.5 rounded-lg text-xs font-black transition border border-blue-100 shadow-sm">수정</button>
+                                                                                        <button onClick={()=>{if(window.confirm('삭제하시겠습니까?')){setDoctorProfiles(prev=>prev.filter(i=>i.id!==p.id)); showToast('삭제됨','success');}}} className="bg-rose-50 hover:bg-rose-100 text-rose-600 px-3 py-1.5 rounded-lg text-xs font-black transition border border-rose-100 shadow-sm">삭제</button>
+                                                                                    </div>
+                                                                                </td>
+                                                                            </React.Fragment>
+                                                                        )}
+                                                                    </tr>
+                                                                ))}
+                                                            </tbody>
+                                                        </table>
+                                                    </div>}
+                                                </div>
+                                                {totalAdminDocPages > 1 && <div className="p-4 border-t flex justify-center gap-4 items-center bg-slate-50 shrink-0"><button onClick={()=>setAdminDocPage(p=>Math.max(1, p-1))} className="text-sm font-bold px-4 py-1.5 bg-white border rounded-lg shadow-sm hover:bg-slate-100">&lt;</button><span className="text-base font-black text-slate-700">{adminDocPage} / {totalAdminDocPages}</span><button onClick={()=>setAdminDocPage(p=>Math.min(totalAdminDocPages, p+1))} className="text-sm font-bold px-4 py-1.5 bg-white border rounded-lg shadow-sm hover:bg-slate-100">&gt;</button></div>}
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    {adminTab === 'setting' && (
+                                        <div className="grid grid-cols-2 gap-6 h-full">
+                                            <div className="bg-white rounded-2xl border border-slate-200 shadow-sm flex flex-col p-6 overflow-hidden">
+                                                <h4 className="font-black text-lg mb-4 flex items-center shrink-0"><i className="fas fa-bullseye text-blue-500 mr-2"></i>월별 목표 설정 현황</h4>
+                                                <div className="flex gap-2 mb-4 shrink-0">
+                                                    <select value={targetViewYear} onChange={e=>setTargetViewYear(Number(e.target.value))} className="border p-3 rounded-xl font-black outline-none bg-slate-50">{[2024,2025,2026,2027].map(y=><option key={y} value={y}>{y}년 조회</option>)}</select>
+                                                    <input type="text" id="tAmt" placeholder="일괄입력(선택)" className="flex-1 border p-3 rounded-xl text-sm font-bold outline-none" onInput={e=>{const r=e.target.value.replace(/[^0-9]/g,""); e.target.value=r?new Intl.NumberFormat('ko-KR').format(Number(r)):"";}}/>
+                                                    <button onClick={()=>{const amt=Number(document.getElementById('tAmt').value.replace(/,/g,'')); if(!amt) return; const newT={...settings.monthlyTargets}; for(let i=1;i<=12;i++) newT[`${targetViewYear}-${i}`]=amt; setSettings(p=>({...p, monthlyTargets:newT})); showToast('일괄적용 됨','success');}} className="bg-slate-800 text-white px-5 rounded-xl text-sm font-black shadow-sm hover:bg-slate-700 transition">일괄반영</button>
+                                                </div>
+                                                
+                                                {/* Optimization: No vertical scroll, target 12 months + sum fixed view */}
+                                                <div className="flex-1 overflow-hidden border rounded-xl border-slate-200">
+                                                    <table className="w-full text-base text-center h-full table-fixed">
+                                                        <thead className="bg-slate-100 font-black text-slate-600 border-b">
+                                                            <tr>
+                                                                <th className="py-2.5">월</th>
+                                                                <th className="py-2.5">목표액 (원)</th>
+                                                            </tr>
+                                                        </thead>
+                                                        <tbody className="divide-y divide-slate-100">
+                                                            {targetTableData.months.map((amt, i) => (
+                                                                <tr key={i} className="hover:bg-slate-50 h-[7%]">
+                                                                    <td className="py-0 font-black text-slate-700 align-middle">{i+1}월</td>
+                                                                    <td className="py-0 font-bold align-middle">
+                                                                        <input type="text" value={amt === 0 ? '' : new Intl.NumberFormat('ko-KR').format(amt)} onChange={e=>{const r=e.target.value.replace(/[^0-9]/g,""); const num=Number(r); setSettings(p=>({...p, monthlyTargets:{...p.monthlyTargets, [`${targetViewYear}-${i+1}`]:num}}));}} placeholder="0" className="w-3/4 bg-transparent text-center outline-none focus:border-b-2 border-blue-400 transition py-0.5" />
+                                                                    </td>
+                                                                </tr>
+                                                            ))}
+                                                            <tr className="bg-blue-50 font-black text-blue-800 h-[10%]">
+                                                                <td className="py-0 align-middle text-lg">연간 합계</td>
+                                                                <td className="py-0 align-middle text-2xl">{formatCurr(targetTableData.sum)}</td>
+                                                            </tr>
+                                                        </tbody>
+                                                    </table>
+                                                </div>
+                                            </div>
+                                            <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 space-y-8 flex flex-col">
+                                                <div className="shrink-0">
+                                                    <h4 className="font-black text-lg mb-4 text-slate-800"><i className="fas fa-paint-brush text-rose-500 mr-2"></i>디스플레이 설정</h4>
+                                                    <div className="space-y-4">
+                                                        <div>
+                                                            <label className="text-xs font-bold text-slate-500 mb-1 block">회사명 텍스트 (로고 미등록 시 출력)</label>
+                                                            <input type="text" placeholder="로고 텍스트 입력" className="w-full border p-3 rounded-xl text-sm font-bold bg-slate-50 outline-none" value={settings.logoText || ''} onChange={e=>setSettings({...settings, logoText: e.target.value})} />
+                                                        </div>
+                                                        <div className="grid grid-cols-2 gap-4">
+                                                            <div className="border border-slate-200 p-4 rounded-xl bg-slate-50/50">
+                                                                <label className="text-xs font-bold text-slate-500 mb-2 block flex items-center"><i className="fas fa-image mr-1"></i> 상단 로고 이미지</label>
+                                                                <input type="file" accept="image/*" onChange={handleLogoUpload} className="w-full text-xs font-bold file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-black file:bg-rose-100 file:text-rose-700 hover:file:bg-rose-200 cursor-pointer" />
+                                                                {settings.logoImage && <div className="mt-3 bg-white border p-2 rounded-lg flex justify-center"><img src={settings.logoImage} alt="logo" className="h-6 object-contain" /></div>}
+                                                            </div>
+                                                            <div className="border border-slate-200 p-4 rounded-xl bg-slate-50/50">
+                                                                <label className="text-xs font-bold text-slate-500 mb-2 block flex items-center"><i className="fas fa-camera mr-1"></i> 메인화면 사진(배너)</label>
+                                                                <input type="file" accept="image/*" onChange={handleBannerUpload} className="w-full text-xs font-bold file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-black file:bg-blue-100 file:text-blue-700 hover:file:bg-blue-200 cursor-pointer" />
+                                                                {settings.bannerImage && <div className="mt-3 bg-white border p-2 rounded-lg flex justify-center"><img src={settings.bannerImage} alt="banner" className="h-6 object-cover rounded" /></div>}
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                                <div className="border-t border-slate-100 pt-6 shrink-0">
+                                                    <h4 className="font-black text-lg mb-4 text-slate-800"><i className="fas fa-key text-amber-500 mr-2"></i>보안 비밀번호 변경</h4>
+                                                    <div className="flex gap-3">
+                                                        <input type="password" placeholder="새 비밀번호 입력" className="flex-1 border p-3 rounded-xl text-sm font-bold bg-slate-50 outline-none" value={newAdminPin} onChange={e=>setNewAdminPin(e.target.value)} />
+                                                        <button onClick={()=>{if(newAdminPin){setSettings({...settings, adminPin:newAdminPin}); setNewAdminPin(''); showToast('변경완료','success');}}} className="bg-amber-500 hover:bg-amber-600 text-white px-6 rounded-xl font-black shadow transition">변경</button>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                        )}
+
+                        {}
+                        {/* TAX Modal */}
+                        {showTaxModal && (
+                            <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-fade-in" onClick={()=>setShowTaxModal(false)}>
+                                <div className="bg-white rounded-[2rem] p-8 w-full max-w-md shadow-2xl relative" onClick={e=>e.stopPropagation()}>
+                                    <button onClick={()=>setShowTaxModal(false)} className="absolute top-6 right-6 text-slate-400 hover:text-slate-800"><i className="fas fa-times text-2xl"></i></button>
+                                    <h3 className="font-black text-2xl mb-6 text-slate-800 flex items-center"><i className="fas fa-file-invoice-dollar text-emerald-500 mr-3 text-3xl"></i>세금 시뮬레이션</h3>
+                                    
+                                    <div className="space-y-5 mb-6">
+                                        <div className="bg-emerald-50/50 p-5 rounded-2xl border border-emerald-100 shadow-sm">
+                                            <div className="flex justify-between items-end mb-3 border-b border-emerald-100 pb-3">
+                                                <label className="text-sm font-black text-emerald-800 block flex flex-col gap-1">
+                                                    <span>부가가치세</span>
+                                                    <span className="text-slate-500 font-bold text-xs">{taxEstimate.vatPeriod} 기준</span>
+                                                </label>
+                                                <span className="text-xs font-black text-emerald-700 bg-emerald-100 px-2 py-1 rounded">등록매출: {formatCurr(taxEstimate.vatSales)}</span>
+                                            </div>
+                                            <input type="text" placeholder="부가세 매입 비용 입력 (원)" value={vatCostOption} onChange={e=>{const r=e.target.value.replace(/[^0-9]/g,""); setVatCostOption(r?new Intl.NumberFormat('ko-KR').format(Number(r)):"");}} className="w-full bg-white border border-emerald-200 p-3 rounded-xl text-sm font-black outline-none focus:ring-2 focus:ring-emerald-400" />
+                                            <div className="text-right mt-3 text-sm font-black text-emerald-700 whitespace-nowrap">예상 부가가치세: {formatCurr(taxEstimate.vat)}</div>
+                                        </div>
+                                        
+                                        <div className="bg-amber-50/50 p-5 rounded-2xl border border-amber-100 shadow-sm">
+                                            <div className="flex justify-between items-end mb-3 border-b border-amber-100 pb-3">
+                                                <label className="text-sm font-black text-amber-800 block flex flex-col gap-1">
+                                                    <span>종합소득세</span>
+                                                    <span className="text-slate-500 font-bold text-xs">{taxEstimate.incPeriod} 기준</span>
+                                                </label>
+                                                <span className="text-xs font-black text-amber-700 bg-amber-100 px-2 py-1 rounded">등록매출: {formatCurr(taxEstimate.incSales)}</span>
+                                            </div>
+                                            <input type="text" placeholder="종소세 필요 경비 입력 (원)" value={incCostOption} onChange={e=>{const r=e.target.value.replace(/[^0-9]/g,""); setIncCostOption(r?new Intl.NumberFormat('ko-KR').format(Number(r)):"");}} className="w-full bg-white border border-amber-200 p-3 rounded-xl text-sm font-black outline-none focus:ring-2 focus:ring-amber-400" />
+                                            <div className="flex justify-between items-center mt-3 text-[11px] font-bold text-amber-800 bg-white/50 p-2 rounded-lg gap-2">
+                                                <span className="whitespace-nowrap">지방소득세(+10%): <span className="font-black">{formatCurr(taxEstimate.localTax)}</span></span>
+                                                <span className="text-[12px] whitespace-nowrap">예상 종합소득세: <span className="font-black text-sm">{formatCurr(taxEstimate.incTax)}</span></span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div className="bg-slate-800 text-white p-5 rounded-2xl flex justify-between items-center shadow-inner">
+                                        <span className="font-bold text-sm text-slate-300">총 합산 세액 추정</span>
+                                        <span className="font-black text-2xl text-yellow-400">{formatCurr(taxEstimate.totalTax)}</span>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Book Modal */}
+                        {selectedBook && (
+                            <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-fade-in" onClick={()=>setSelectedBook(null)}>
+                                <div className="bg-white rounded-[2rem] p-8 w-full max-w-sm shadow-2xl relative" onClick={e=>e.stopPropagation()}>
+                                    <button onClick={()=>setSelectedBook(null)} className="absolute top-6 right-6 text-slate-400 hover:text-slate-800"><i className="fas fa-times text-2xl"></i></button>
+                                    <div className="text-center mb-6 mt-4">
+                                        <h3 className="font-black text-2xl text-slate-800 mb-2">{selectedBook.title}</h3>
+                                        <p className="text-sm font-bold text-slate-500">{selectedBook.author}</p>
+                                    </div>
+                                    <div className="bg-slate-50 p-5 rounded-2xl mb-6 border border-slate-100 shadow-sm relative">
+                                        <i className="fas fa-quote-left absolute top-3 left-3 text-slate-200 text-2xl"></i>
+                                        <p className="text-sm font-bold leading-relaxed text-slate-700 break-keep relative z-10 pt-4 px-2 text-center">"{selectedBook.summary}"</p>
+                                    </div>
+                                    <div className="flex justify-between items-end mb-4 px-2">
+                                        <span className="text-sm font-bold text-slate-400 line-through">정가 {new Intl.NumberFormat('ko-KR').format(selectedBook.price)}원</span>
+                                        <span className="text-2xl font-black text-rose-500">{new Intl.NumberFormat('ko-KR').format(selectedBook.discount)}원</span>
+                                    </div>
+                                    <div className="bg-emerald-50 text-emerald-700 p-4 rounded-xl text-center font-black text-sm border border-emerald-100 shadow-sm">
+                                        <i className="fas fa-shopping-cart mr-2"></i> 추천 구매처: {selectedBook.link}
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Hospital / Doctor Details Modal */}
+                        {(hospModalData || selectedDocDetail) && (
+                            <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-fade-in" onClick={()=>{setHospModalData(null); setSelectedDocDetail(null);}}>
+                                <div className="bg-white rounded-[2rem] p-8 w-full max-w-sm shadow-2xl relative" onClick={e=>e.stopPropagation()}>
+                                    <button onClick={()=>{setHospModalData(null); setSelectedDocDetail(null);}} className="absolute top-6 right-6 text-slate-400 hover:text-slate-800"><i className="fas fa-times text-2xl"></i></button>
+                                    
+                                    {hospModalData && (
+                                        <React.Fragment>
+                                            <div className="mb-6 mt-2">
+                                                <h3 className="font-black text-2xl text-slate-800 mb-1">{hospModalData.hospitalName}</h3>
+                                                <p className="text-sm font-bold text-indigo-600"><i className="fas fa-user-md mr-1"></i>{hospModalData.doctorName} 원장님</p>
+                                            </div>
+                                            <div className="space-y-4">
+                                                <div className="bg-emerald-50 border border-emerald-100 p-5 rounded-2xl flex flex-col gap-3 shadow-sm">
+                                                    <div className="text-sm font-black text-emerald-800 border-b border-emerald-200 pb-2">당월 실적 현황</div>
+                                                    <div className="flex justify-between items-center text-sm font-black"><span className="text-slate-600">매출</span><span className="text-emerald-700 text-base">{formatCurr(hospModalData.curAmt)}</span></div>
+                                                    <div className="flex justify-between items-center text-sm font-bold"><span className="text-slate-500">수수료</span><span className="text-rose-500 text-base">{formatCurr(hospModalData.curComm)}</span></div>
+                                                    <div className="flex justify-between items-center text-sm font-black pt-2 border-t border-emerald-200/50"><span className="text-slate-700">당월 순수익</span><span className="text-indigo-700 text-lg">{formatCurr(hospModalData.curNet)}</span></div>
+                                                </div>
+                                                <div className="bg-blue-50 border border-blue-100 p-5 rounded-2xl flex flex-col gap-3 shadow-sm">
+                                                    <div className="text-sm font-black text-blue-800 border-b border-blue-200 pb-2">연간 누적 실적</div>
+                                                    <div className="flex justify-between items-center text-sm font-black"><span className="text-slate-600">매출 누적</span><span className="text-blue-700 text-base">{formatCurr(hospModalData.accAmt)}</span></div>
+                                                    <div className="flex justify-between items-center text-sm font-black pt-2 border-t border-blue-200/50"><span className="text-slate-700">누적 순수익</span><span className="text-indigo-700 text-lg">{formatCurr(hospModalData.accNet)}</span></div>
+                                                </div>
+                                            </div>
+                                        </React.Fragment>
+                                    )}
+
+                                    {selectedDocDetail && (
+                                        <React.Fragment>
+                                            <div className="text-center mb-6 mt-4">
+                                                <div className="w-20 h-20 bg-indigo-100 text-indigo-500 rounded-full flex items-center justify-center text-4xl mx-auto mb-4 shadow-sm"><i className="fas fa-user-md"></i></div>
+                                                <h3 className="font-black text-3xl text-slate-800">{selectedDocDetail.doctorName} <span className="text-base text-slate-500 font-bold">원장님</span></h3>
+                                                <p className="text-base font-black text-indigo-600 mt-1">{selectedDocDetail.hospitalName}</p>
+                                            </div>
+                                            <div className="bg-slate-50 p-5 rounded-2xl border border-slate-100 space-y-4 shadow-sm">
+                                                <div className="flex items-center text-base"><i className="fas fa-birthday-cake w-8 text-pink-400 text-center text-lg"></i> <span className="font-bold text-slate-600 w-20">생일</span> <span className="font-black text-slate-800">{selectedDocDetail.birthDate} <span className="text-xs text-slate-400 font-bold ml-1">({selectedDocDetail.isLunar?'음력':'양력'})</span></span></div>
+                                                <div className="flex items-center text-base"><i className="fas fa-heart w-8 text-rose-400 text-center text-lg"></i> <span className="font-bold text-slate-600 w-20">관심사</span> <span className="font-black text-slate-800">{selectedDocDetail.likes || '정보 없음'}</span></div>
+                                                <div className="flex items-center text-base"><i className="fas fa-users w-8 text-teal-400 text-center text-lg"></i> <span className="font-bold text-slate-600 w-20">가족</span> <span className="font-black text-slate-800">{selectedDocDetail.family || '정보 없음'}</span></div>
+                                            </div>
+                                        </React.Fragment>
+                                    )}
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Toast */}
+                        {toast && <div className={`fixed bottom-12 left-1/2 transform -translate-x-1/2 px-8 py-3 rounded-full text-base font-black shadow-2xl z-50 text-white ${toast.type==='error'?'bg-rose-500':'bg-slate-800'} animate-fade-in flex items-center gap-3`}><i className={`fas ${toast.type==='error'?'fa-exclamation-triangle':'fa-check-circle'} text-lg`}></i> {toast.msg}</div>}
+                    </div>
+                </React.Fragment>
+            );
+        };
+
+        ReactDOM.render(<App />, document.getElementById('root'));
+    </script>
+</body>
+</html>
